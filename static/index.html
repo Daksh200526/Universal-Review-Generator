@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>URG - Universal Review Generator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    .glassmorphism {
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+  </style>
+</head>
+<body class="bg-[#0b0f19] text-slate-100 min-h-screen flex flex-col selection:bg-indigo-500 selection:text-white">
+
+  <!-- Navigation Bar -->
+  <nav class="border-b border-slate-800/80 bg-[#0b0f19]/80 backdrop-blur-md sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3 cursor-pointer" onclick="navigateTo('dashboard')">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+          <i data-lucide="sparkles" class="w-5 h-5 text-white"></i>
+        </div>
+        <div>
+          <span class="text-xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">URG</span>
+          <span class="text-xs px-2 py-0.5 ml-2 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-medium">Pro</span>
+        </div>
+      </div>
+      <div class="flex items-center space-x-2 sm:space-x-4">
+        <button onclick="navigateTo('dashboard')" class="px-3 py-2 rounded-lg text-sm font-medium hover:text-white text-slate-400 transition-colors">
+          Dashboard
+        </button>
+        <button onclick="navigateTo('projects-list')" class="px-3 py-2 rounded-lg text-sm font-medium hover:text-white text-slate-400 transition-colors">
+          Existing Projects
+        </button>
+        <button onclick="navigateTo('create-project')" class="inline-flex items-center px-4 py-2 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition-all shadow-md shadow-indigo-600/30">
+          <i data-lucide="plus" class="w-4 h-4 mr-1.5"></i> Create New Project
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Notification Container -->
+  <div id="toast-container" class="fixed top-20 right-4 z-50 flex flex-col space-y-2 pointer-events-none"></div>
+
+  <!-- Main View Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    
+    <!-- DASHBOARD VIEW -->
+    <section id="view-dashboard" class="space-y-8">
+      <div class="relative overflow-hidden rounded-3xl p-8 sm:p-12 border border-slate-800 bg-gradient-to-br from-indigo-950/40 via-slate-900/40 to-slate-950">
+        <div class="relative z-10 max-w-2xl space-y-4">
+          <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+            Universal Reputation Engine
+          </span>
+          <h1 class="text-3xl sm:text-5xl font-black tracking-tight text-white leading-tight">
+            High-converting customer reviews made effortless.
+          </h1>
+          <p class="text-slate-400 text-sm sm:text-base leading-relaxed">
+            Eliminate customer writer's block. Build custom multi-choice questionnaires, generate scannable table QR codes, and synthesize authentic, non-repeating reviews with instant clipboard sync.
+          </p>
+          <div class="pt-4 flex flex-wrap gap-4">
+            <button onclick="navigateTo('create-project')" class="px-6 py-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-semibold shadow-lg shadow-indigo-500/25 transition-all flex items-center">
+              <i data-lucide="plus-circle" class="w-5 h-5 mr-2"></i> Create New Project
+            </button>
+            <button onclick="navigateTo('projects-list')" class="px-6 py-3 rounded-xl glassmorphism hover:bg-white/10 text-slate-200 font-semibold transition-all flex items-center">
+              <i data-lucide="folder" class="w-5 h-5 mr-2 text-indigo-400"></i> View Existing Projects
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="glassmorphism rounded-2xl p-6">
+          <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Active Campaigns</div>
+          <div id="stat-projects-count" class="text-3xl font-bold text-white mt-2">0</div>
+        </div>
+        <div class="glassmorphism rounded-2xl p-6">
+          <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Synthesis Engine</div>
+          <div class="text-3xl font-bold text-emerald-400 mt-2">Combinatorial NLG</div>
+        </div>
+        <div class="glassmorphism rounded-2xl p-6">
+          <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider">API Dependency</div>
+          <div class="text-3xl font-bold text-indigo-400 mt-2">Zero (Client-Side)</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CREATE PROJECT VIEW -->
+    <section id="view-create-project" class="hidden max-w-3xl mx-auto space-y-8">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-5">
+        <div>
+          <h2 class="text-2xl font-bold text-white">Create New Project</h2>
+          <p class="text-sm text-slate-400">Configure business identity, survey options, and destination review URL.</p>
+        </div>
+        <button onclick="navigateTo('dashboard')" class="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <form id="project-form" class="space-y-6" onsubmit="handleSaveProject(event)">
+        <div class="space-y-2">
+          <label class="block text-sm font-semibold text-slate-300">Project / Business Title *</label>
+          <input type="text" id="project-title" required placeholder="e.g. Acme Dental Clinic, Coastal Wave Cafe" class="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-white text-sm" />
+        </div>
+
+        <div class="space-y-2">
+          <label class="block text-sm font-semibold text-slate-300">Target Review Destination URL *</label>
+          <input type="url" id="project-url" required placeholder="https://g.page/r/your-google-review-link" class="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-white text-sm" />
+          <p class="text-xs text-slate-500">The destination where customers will paste their generated review (Google Reviews, Yelp, Trustpilot, etc.).</p>
+        </div>
+
+        <!-- Question List Container -->
+        <div class="space-y-4 pt-4">
+          <div class="flex items-center justify-between">
+            <label class="text-base font-bold text-slate-200">Survey Prompts & Options</label>
+            <button type="button" onclick="addQuestionBlock()" class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-600/30 transition-all flex items-center">
+              <i data-lucide="plus" class="w-3.5 h-3.5 mr-1"></i> Add Question
+            </button>
+          </div>
+          <div id="questions-container" class="space-y-4"></div>
+        </div>
+
+        <div class="pt-6 flex justify-end space-x-3 border-t border-slate-800">
+          <button type="button" onclick="navigateTo('dashboard')" class="px-5 py-2.5 rounded-xl border border-slate-700 text-slate-300 hover:bg-slate-800 text-sm font-semibold">
+            Cancel
+          </button>
+          <button type="submit" class="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold shadow-lg shadow-indigo-600/20">
+            Save & Publish Project
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <!-- EXISTING PROJECTS VIEW -->
+    <section id="view-projects-list" class="hidden space-y-6">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-5">
+        <div>
+          <h2 class="text-2xl font-bold text-white">Existing Projects</h2>
+          <p class="text-sm text-slate-400">View, test, generate QR codes, or delete saved review funnels.</p>
+        </div>
+        <button onclick="navigateTo('create-project')" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center shadow-md">
+          <i data-lucide="plus" class="w-4 h-4 mr-1"></i> New Project
+        </button>
+      </div>
+      <div id="projects-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+      <div id="projects-empty-state" class="hidden py-16 text-center space-y-4">
+        <div class="w-16 h-16 mx-auto rounded-full bg-slate-800 flex items-center justify-center text-slate-500">
+          <i data-lucide="folder-x" class="w-8 h-8"></i>
+        </div>
+        <div class="text-slate-400 text-base">No active campaigns found. Create your first project to get started.</div>
+      </div>
+    </section>
+
+    <!-- LIVE CLIENT SURVEY & REVIEW GENERATION VIEW -->
+    <section id="view-survey" class="hidden max-w-2xl mx-auto space-y-8">
+      <div class="text-center space-y-2 border-b border-slate-800 pb-6">
+        <span class="text-xs uppercase tracking-widest text-indigo-400 font-bold">Feedback Experience</span>
+        <h2 id="survey-title" class="text-3xl font-extrabold text-white tracking-tight">Campaign Title</h2>
+        <p class="text-sm text-slate-400">Select what best reflects your experience to draft an authentic review.</p>
+      </div>
+
+      <form id="survey-form" class="space-y-6" onsubmit="handleGenerateReview(event)">
+        <div id="survey-questions-mount" class="space-y-6"></div>
+
+        <div class="pt-4 border-t border-slate-800">
+          <button type="submit" class="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-500 via-purple-600 to-pink-500 text-white font-bold text-base shadow-lg shadow-indigo-500/25 hover:opacity-95 transition-all flex items-center justify-center">
+            <i data-lucide="sparkles" class="w-5 h-5 mr-2"></i> Generate Review
+          </button>
+        </div>
+      </form>
+
+      <!-- Review Output Area -->
+      <div id="review-output-container" class="hidden space-y-4 pt-6 border-t border-slate-800">
+        <div class="flex items-center justify-between">
+          <label class="text-sm font-bold text-slate-200 flex items-center">
+            <i data-lucide="check-circle" class="w-4 h-4 text-emerald-400 mr-2"></i> Review Generated (Editable)
+          </label>
+          <button type="button" onclick="regenerateVariation()" class="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Try another variation
+          </button>
+        </div>
+        
+        <textarea id="generated-review-text" rows="5" class="w-full p-4 rounded-xl bg-slate-900 border border-slate-700 text-slate-100 text-sm focus:border-indigo-500 outline-none leading-relaxed transition-all"></textarea>
+        
+        <button id="copy-redirect-btn" type="button" onclick="handleCopyAndRedirect()" class="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-base transition-all flex items-center justify-center shadow-lg shadow-emerald-600/20">
+          <i data-lucide="copy" class="w-5 h-5 mr-2"></i> Copy and Redirect
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Delete Modal -->
+  <div id="delete-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+    <div class="w-full max-w-sm glassmorphism bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-2xl">
+      <div class="w-12 h-12 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400">
+        <i data-lucide="trash-2" class="w-6 h-6"></i>
+      </div>
+      <div>
+        <h3 class="text-lg font-bold text-white">Delete Campaign?</h3>
+        <p class="text-xs text-slate-400 mt-1">This will permanently remove "<span id="delete-project-name" class="font-semibold text-slate-200"></span>".</p>
+      </div>
+      <div class="flex justify-end space-x-2 pt-2">
+        <button onclick="closeDeleteModal()" class="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white">Cancel</button>
+        <button id="confirm-delete-btn" class="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold text-sm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- QR Code Modal -->
+  <div id="qr-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+    <div class="w-full max-w-sm glassmorphism bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5 text-center shadow-2xl">
+      <div class="flex justify-between items-center">
+        <h3 class="text-lg font-bold text-white" id="qr-project-title">QR Code</h3>
+        <button onclick="closeQrModal()" class="text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+      <div id="qrcode-container" class="p-4 bg-white rounded-xl inline-block mx-auto shadow-inner"></div>
+      <p class="text-xs text-slate-400">Scan this code to launch the dynamic survey funnel directly on mobile.</p>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = 'URG_PROJECTS_DATA_V1';
+    let projects = [];
+    let activeSurveyProject = null;
+    let pendingDeleteId = null;
+    let cachedSelectedOptions = [];
+
+    // --- COMBINATORIAL NATURAL LANGUAGE SYNTHESIS ENGINE ---
+    function synthesizeCombinatorialReview(businessName, items) {
+      if (!items || !items.length) return "";
+
+      const openers = [
+        `Had a thoroughly positive experience with ${businessName} recently.`,
+        `Really glad I decided to choose ${businessName}.`,
+        `Outstanding experience with ${businessName} from beginning to end.`,
+        `Can't speak highly enough of my experience with ${businessName}.`,
+        `Recently visited ${businessName} and came away genuinely impressed.`,
+        `5 stars for ${businessName}! The entire experience exceeded expectations.`,
+        `So glad I found ${businessName} — easily one of the best around.`,
+        `I had high hopes for ${businessName}, and they delivered on every front.`
+      ];
+
+      const cleanItem = (str) => {
+        let s = str.trim().toLowerCase();
+        s = s.replace(/^(the|their|our|a|an)\s+/i, '');
+        return s;
+      };
+
+      const primaryFrames = [
+        (it) => `What really stood out to me was the ${cleanItem(it)}.`,
+        (it) => `I was especially impressed by their ${cleanItem(it)}.`,
+        (it) => `The ${cleanItem(it)} made an immediate positive difference.`,
+        (it) => `You can tell they genuinely prioritize ${cleanItem(it)}.`,
+        (it) => `Right from the start, the attention given to ${cleanItem(it)} was obvious.`
+      ];
+
+      const secondaryFrames = [
+        (it) => `On top of that, their ${cleanItem(it)} was top tier.`,
+        (it) => `Coupled with that, the ${cleanItem(it)} was equally remarkable.`,
+        (it) => `In addition, they delivered great ${cleanItem(it)}.`,
+        (it) => `It was clear that their ${cleanItem(it)} is handled with real care and professionalism.`,
+        (it) => `Beyond that, having such reliable ${cleanItem(it)} made everything seamless.`
+      ];
+
+      const closers = [
+        `Will definitely be returning and recommending them to family and friends.`,
+        `Solid 5 stars — keep up the phenomenal work!`,
+        `Deserves every bit of a 5-star rating without question.`,
+        `A trustworthy team that delivers exactly what you hope for. Highly recommended!`,
+        `Will certainly be back. Easily one of the smoothest experiences I've had.`,
+        `If you are looking for quality and great service, look no further!`
+      ];
+
+      const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+      const shuffled = [...items].sort(() => 0.5 - Math.random());
+
+      const intro = pick(openers);
+      let body = "";
+
+      if (shuffled.length === 1) {
+        body = pick(primaryFrames)(shuffled[0]);
+      } else if (shuffled.length === 2) {
+        const p1 = pick(primaryFrames)(shuffled[0]);
+        const p2 = pick(secondaryFrames)(shuffled[1]);
+        body = `${p1} ${p2}`;
+      } else {
+        const p1 = pick(primaryFrames)(shuffled[0]);
+        const p2 = pick(secondaryFrames)(shuffled[1]);
+        const rest = shuffled.slice(2).map(cleanItem).join(' and ');
+        body = `${p1} ${p2} Furthermore, the ${rest} was just as impressive.`;
+      }
+
+      const outro = pick(closers);
+      return `${intro} ${body} ${outro}`;
+    }
+
+    // --- APPLICATION CORE LOGIC ---
+    function init() {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        try { projects = JSON.parse(stored); } catch (e) { projects = []; }
+      }
+      if (!projects.length) {
+        projects = [{
+          id: 'proj_sample',
+          title: 'Prime Dentistry & Orthodontics',
+          redirectUrl: 'https://maps.google.com',
+          questions: [
+            { id: 'q1', text: 'How was the clinical consultation?', type: 'single', options: ['Compassionate & gentle care', 'Highly professional staff', 'Clear explanation of treatments'] },
+            { id: 'q2', text: 'What did you appreciate most?', type: 'multiple', options: ['Zero waiting duration', 'Painless treatment', 'Immaculate clinic hygiene', 'Welcoming front desk reception'] }
+          ]
+        }];
+        saveToStorage();
+      }
+      lucide.createIcons();
+      updateDashboardStats();
+    }
+
+    function saveToStorage() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+      updateDashboardStats();
+    }
+
+    function updateDashboardStats() {
+      const el = document.getElementById('stat-projects-count');
+      if (el) el.innerText = projects.length;
+    }
+
+    function navigateTo(viewId, param = null) {
+      ['dashboard', 'create-project', 'projects-list', 'survey'].forEach(v => {
+        document.getElementById(`view-${v}`).classList.add('hidden');
+      });
+      document.getElementById(`view-${viewId}`).classList.remove('hidden');
+
+      if (viewId === 'projects-list') renderProjectsGrid();
+      if (viewId === 'survey' && param) loadSurveyView(param);
+      lucide.createIcons();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function addQuestionBlock(qText = '', qType = 'single', options = []) {
+      const container = document.getElementById('questions-container');
+      const qId = 'q_' + Math.random().toString(36).substr(2, 9);
+      const div = document.createElement('div');
+      div.className = 'glassmorphism p-5 rounded-2xl border border-slate-800 space-y-4';
+      div.id = qId;
+      div.innerHTML = `
+        <div class="flex items-center justify-between gap-4">
+          <input type="text" placeholder="Enter Question Prompt (e.g. How was our service?)..." required value="${qText}" class="q-title-input flex-1 px-3.5 py-2.5 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:border-indigo-500 outline-none" />
+          <select class="q-type-select px-3 py-2.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-semibold text-slate-300 outline-none">
+            <option value="single" ${qType === 'single' ? 'selected' : ''}>Single Choice</option>
+            <option value="multiple" ${qType === 'multiple' ? 'selected' : ''}>Multiple Choice</option>
+          </select>
+          <button type="button" onclick="document.getElementById('${qId}').remove()" class="text-slate-500 hover:text-red-400 p-1">
+            <i data-lucide="trash-2" class="w-4 h-4"></i>
+          </button>
+        </div>
+        <div class="space-y-2">
+          <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Answer Options (Comma separated phrases)</label>
+          <input type="text" placeholder="e.g. Prompt turnaround, Friendly team, Immaculate workspace" value="${options.join(', ')}" class="q-options-input w-full px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white focus:border-indigo-500 outline-none" />
+        </div>
+      `;
+      container.appendChild(div);
+      lucide.createIcons();
+    }
+
+    function handleSaveProject(e) {
+      e.preventDefault();
+      const title = document.getElementById('project-title').value.trim();
+      const redirectUrl = document.getElementById('project-url').value.trim();
+      const qBlocks = document.querySelectorAll('#questions-container > div');
+      
+      const questions = [];
+      qBlocks.forEach(block => {
+        const qTitle = block.querySelector('.q-title-input').value.trim();
+        const qType = block.querySelector('.q-type-select').value;
+        const optsRaw = block.querySelector('.q-options-input').value;
+        const options = optsRaw.split(',').map(s => s.trim()).filter(Boolean);
+        if (qTitle && options.length) {
+          questions.push({ id: block.id, text: qTitle, type: qType, options });
+        }
+      });
+
+      if (!questions.length) {
+        showToast('Please add at least one question with options.', 'error');
+        return;
+      }
+
+      const newProj = {
+        id: 'proj_' + Date.now(),
+        title,
+        redirectUrl,
+        questions
+      };
+
+      projects.unshift(newProj);
+      saveToStorage();
+      e.target.reset();
+      document.getElementById('questions-container').innerHTML = '';
+      showToast('Project created successfully!');
+      navigateTo('projects-list');
+    }
+
+    function renderProjectsGrid() {
+      const grid = document.getElementById('projects-grid');
+      const empty = document.getElementById('projects-empty-state');
+      grid.innerHTML = '';
+
+      if (!projects.length) {
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+
+      projects.forEach(p => {
+        const card = document.createElement('div');
+        card.className = 'glassmorphism border border-slate-800 rounded-2xl p-6 flex flex-col justify-between space-y-4 hover:border-slate-700 transition-all';
+        card.innerHTML = `
+          <div>
+            <div class="flex items-start justify-between">
+              <h3 class="font-bold text-white text-lg tracking-tight line-clamp-1">${p.title}</h3>
+              <button onclick="promptDelete('${p.id}', '${p.title}')" class="text-slate-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-slate-800 transition-colors">
+                <i data-lucide="trash" class="w-4 h-4"></i>
+              </button>
+            </div>
+            <p class="text-xs text-slate-400 mt-1 line-clamp-1 truncate">${p.redirectUrl}</p>
+            <div class="mt-4 flex items-center text-xs text-indigo-400">
+              <i data-lucide="list-checks" class="w-4 h-4 mr-1.5"></i> ${p.questions.length} Question(s)
+            </div>
+          </div>
+          <div class="pt-4 border-t border-slate-800/80 flex items-center justify-between gap-2">
+            <button onclick="openQrModal('${p.title}', '${p.id}')" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 flex items-center">
+              <i data-lucide="qr-code" class="w-4 h-4 mr-1.5"></i> QR Code
+            </button>
+            <button onclick="navigateTo('survey', '${p.id}')" class="flex-1 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white flex items-center justify-center">
+              Launch Funnel <i data-lucide="arrow-right" class="w-3.5 h-3.5 ml-1"></i>
+            </button>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+      lucide.createIcons();
+    }
+
+    function promptDelete(id, title) {
+      pendingDeleteId = id;
+      document.getElementById('delete-project-name').innerText = title;
+      document.getElementById('delete-modal').classList.remove('hidden');
+      document.getElementById('confirm-delete-btn').onclick = () => {
+        projects = projects.filter(x => x.id !== pendingDeleteId);
+        saveToStorage();
+        closeDeleteModal();
+        renderProjectsGrid();
+        showToast('Project deleted successfully.');
+      };
+    }
+
+    function closeDeleteModal() {
+      document.getElementById('delete-modal').classList.add('hidden');
+      pendingDeleteId = null;
+    }
+
+    function openQrModal(title, id) {
+      document.getElementById('qr-project-title').innerText = title;
+      const qrContainer = document.getElementById('qrcode-container');
+      qrContainer.innerHTML = '';
+      const url = `${window.location.origin}/?project_id=${id}`;
+      new QRCode(qrContainer, {
+        text: url,
+        width: 180,
+        height: 180,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.H
+      });
+      document.getElementById('qr-modal').classList.remove('hidden');
+    }
+
+    function closeQrModal() {
+      document.getElementById('qr-modal').classList.add('hidden');
+    }
+
+    function loadSurveyView(id) {
+      const project = projects.find(x => x.id === id);
+      if (!project) return navigateTo('dashboard');
+
+      activeSurveyProject = project;
+      document.getElementById('survey-title').innerText = project.title;
+      document.getElementById('review-output-container').classList.add('hidden');
+      const mount = document.getElementById('survey-questions-mount');
+      mount.innerHTML = '';
+
+      project.questions.forEach((q, idx) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'glassmorphism p-5 rounded-2xl border border-slate-800 space-y-3';
+        wrap.innerHTML = `
+          <div class="flex items-center justify-between">
+            <h4 class="font-bold text-white text-sm">${idx + 1}. ${q.text}</h4>
+            <span class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-medium">${q.type === 'single' ? 'Single Choice' : 'Multi Choice'}</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+            ${q.options.map(opt => `
+              <label class="flex items-center space-x-3 p-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-slate-700 cursor-pointer transition-all">
+                <input type="${q.type === 'single' ? 'radio' : 'checkbox'}" name="${q.id}" value="${opt}" class="rounded border-slate-700 text-indigo-600 focus:ring-0" />
+                <span class="text-xs text-slate-300">${opt}</span>
+              </label>
+            `).join('')}
+          </div>
+        `;
+        mount.appendChild(wrap);
+      });
+    }
+
+    function handleGenerateReview(e) {
+      e.preventDefault();
+      if (!activeSurveyProject) return;
+
+      const selectedOptions = [];
+      activeSurveyProject.questions.forEach(q => {
+        const checked = Array.from(document.querySelectorAll(`input[name="${q.id}"]:checked`)).map(c => c.value);
+        if (checked.length) selectedOptions.push(...checked);
+      });
+
+      if (!selectedOptions.length) {
+        showToast('Please select at least one option to generate a review.', 'error');
+        return;
+      }
+
+      cachedSelectedOptions = selectedOptions;
+      const review = synthesizeCombinatorialReview(activeSurveyProject.title, selectedOptions);
+
+      const outBox = document.getElementById('review-output-container');
+      const txtArea = document.getElementById('generated-review-text');
+      txtArea.value = review;
+      outBox.classList.remove('hidden');
+      lucide.createIcons();
+      outBox.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function regenerateVariation() {
+      if (!activeSurveyProject || !cachedSelectedOptions.length) return;
+      const txtArea = document.getElementById('generated-review-text');
+      txtArea.value = synthesizeCombinatorialReview(activeSurveyProject.title, cachedSelectedOptions);
+      showToast('Generated fresh review variation!');
+    }
+
+    async function handleCopyAndRedirect() {
+      const text = document.getElementById('generated-review-text').value;
+      if (!text) return;
+
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast('Review copied! Opening destination...');
+      } catch (err) {
+        showToast('Redirecting...', 'info');
+      }
+
+      setTimeout(() => {
+        if (activeSurveyProject && activeSurveyProject.redirectUrl) {
+          window.open(activeSurveyProject.redirectUrl, '_blank');
+        }
+      }, 700);
+    }
+
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = `px-4 py-3 rounded-xl text-xs font-semibold shadow-2xl flex items-center space-x-2 text-white transition-all transform duration-300 pointer-events-auto ${type === 'error' ? 'bg-red-600' : 'bg-slate-800 border border-slate-700'}`;
+      toast.innerHTML = `<span>${message}</span>`;
+      container.appendChild(toast);
+      setTimeout(() => toast.remove(), 3500);
+    }
+
+    window.onload = () => {
+      init();
+      addQuestionBlock();
+      const params = new URLSearchParams(window.location.search);
+      const projId = params.get('project_id');
+      if (projId) navigateTo('survey', projId);
+    };
+  </script>
+</body>
+</html>
