@@ -143,7 +143,7 @@
           <input type="url" id="project-url" required placeholder="https://g.page/r/your-google-review-link" class="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-white text-sm" />
         </div>
 
-        <!-- CUSTOMER MODE: Dynamic Freeform Question List -->
+        <!-- CUSTOMER MODE: Dynamic Question List -->
         <div id="customer-mode-container" class="space-y-4 pt-4">
           <div class="flex items-center justify-between">
             <label class="text-base font-bold text-slate-200">Customer Survey Questions</label>
@@ -154,7 +154,7 @@
           <div id="questions-container" class="space-y-4"></div>
         </div>
 
-        <!-- STUDENT MODE: Dependent Experts & Expertise Configurator -->
+        <!-- STUDENT MODE: Experts & Expertise Configurator -->
         <div id="student-mode-container" class="hidden space-y-4 pt-4">
           <div class="flex items-center justify-between">
             <div>
@@ -208,7 +208,6 @@
       </div>
 
       <form id="survey-form" class="space-y-6" onsubmit="handleGenerateReview(event)">
-        <!-- Container for dynamically rendered questions -->
         <div id="survey-questions-mount" class="space-y-6"></div>
 
         <div class="pt-4 border-t border-slate-800">
@@ -284,7 +283,6 @@
         try { projects = JSON.parse(stored); } catch (e) { projects = []; }
       }
       if (!projects.length) {
-        // Pre-populate with realistic defaults for both Student and Customer
         projects = [
           {
             id: 'proj_student_demo',
@@ -370,12 +368,22 @@
       if (mode === 'student') {
         custBox.classList.add('hidden');
         studBox.classList.remove('hidden');
+
+        // Disable customer inputs so hidden 'required' attributes never block form submission
+        custBox.querySelectorAll('input, select').forEach(el => el.disabled = true);
+        studBox.querySelectorAll('input, select').forEach(el => el.disabled = false);
+
         if (document.querySelectorAll('#experts-container > div').length === 0) {
           addExpertBlock('Jayakrishna', ['Full-Stack Roadmap Guidance', 'FastAPI & Backend Architecture', 'Mock Technical Interviews']);
         }
       } else {
         studBox.classList.add('hidden');
         custBox.classList.remove('hidden');
+
+        // Re-enable customer inputs and disable student inputs
+        custBox.querySelectorAll('input, select').forEach(el => el.disabled = false);
+        studBox.querySelectorAll('input, select').forEach(el => el.disabled = true);
+
         if (document.querySelectorAll('#questions-container > div').length === 0) {
           addQuestionBlock();
         }
@@ -383,7 +391,6 @@
       lucide.createIcons();
     }
 
-    // Customer Mode Question Block Builder
     function addQuestionBlock(qText = '', qType = 'single', options = []) {
       const container = document.getElementById('questions-container');
       const qId = 'q_' + Math.random().toString(36).substr(2, 9);
@@ -410,7 +417,6 @@
       lucide.createIcons();
     }
 
-    // Student Mode Expert Block Builder
     function addExpertBlock(name = '', skills = []) {
       const container = document.getElementById('experts-container');
       const expId = 'exp_' + Math.random().toString(36).substr(2, 9);
@@ -466,7 +472,6 @@
         }
         newProj.questions = questions;
       } else {
-        // Student Mode
         const expBlocks = document.querySelectorAll('#experts-container > div');
         const experts = [];
         expBlocks.forEach(block => {
@@ -493,6 +498,10 @@
       updateDashboardStats();
 
       e.target.reset();
+      document.getElementById('questions-container').innerHTML = '';
+      document.getElementById('experts-container').innerHTML = '';
+      toggleProjectMode();
+
       showToast('Project published successfully!');
       navigateTo('projects-list');
     }
@@ -529,7 +538,7 @@
             <p class="text-xs text-slate-400 mt-2 line-clamp-1 truncate">${p.redirectUrl}</p>
             <div class="mt-4 flex items-center text-xs text-slate-300">
               <i data-lucide="${isStudent ? 'users' : 'list-checks'}" class="w-4 h-4 mr-1.5 text-indigo-400"></i>
-              ${isStudent ? `${p.experts.length} Expert Mentors` : `${p.questions.length} Question Prompts`}
+              ${isStudent ? `${(p.experts || []).length} Expert Mentors` : `${(p.questions || []).length} Question Prompts`}
             </div>
           </div>
           <div class="pt-4 border-t border-slate-800/80 flex items-center justify-between gap-2">
@@ -584,7 +593,6 @@
       document.getElementById('qr-modal').classList.add('hidden');
     }
 
-    // --- SURVEY LAUNCH & DYNAMIC BRANCHING ---
     function loadSurveyView(id) {
       const project = projects.find(x => x.id === id);
       if (!project) return navigateTo('dashboard');
@@ -602,16 +610,14 @@
         : 'Select what best reflects your experience to draft an authentic review.';
 
       if (isStudent) {
-        // Render 2 Question Student Flow with dynamic dependency
         mount.innerHTML = `
-          <!-- Question 1: Expert Selection -->
           <div class="glassmorphism p-5 rounded-2xl border border-slate-800 space-y-3">
             <div class="flex items-center justify-between">
               <h4 class="font-bold text-white text-sm">1. Which expert did you consult?</h4>
               <span class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-medium">Single Choice</span>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1" id="student-q1-options">
-              ${project.experts.map((exp, i) => `
+              ${(project.experts || []).map((exp, i) => `
                 <label class="flex items-center space-x-3 p-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-indigo-500/50 cursor-pointer transition-all">
                   <input type="radio" name="student_expert" value="${exp.name}" ${i === 0 ? 'checked' : ''} onchange="updateStudentExpertiseOptions('${exp.id}')" class="text-indigo-600 focus:ring-0" />
                   <span class="text-xs font-semibold text-slate-200">${exp.name}</span>
@@ -620,7 +626,6 @@
             </div>
           </div>
 
-          <!-- Question 2: Dynamic Dependent Expertise Options -->
           <div class="glassmorphism p-5 rounded-2xl border border-slate-800 space-y-3">
             <div class="flex items-center justify-between">
               <h4 class="font-bold text-white text-sm" id="student-q2-title">2. What did they help you master?</h4>
@@ -629,12 +634,11 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1" id="student-q2-options"></div>
           </div>
         `;
-        if (project.experts.length > 0) {
+        if (project.experts && project.experts.length > 0) {
           updateStudentExpertiseOptions(project.experts[0].id);
         }
       } else {
-        // Standard Customer Flow
-        project.questions.forEach((q, idx) => {
+        (project.questions || []).forEach((q, idx) => {
           const wrap = document.createElement('div');
           wrap.className = 'glassmorphism p-5 rounded-2xl border border-slate-800 space-y-3';
           wrap.innerHTML = `
@@ -657,7 +661,6 @@
       lucide.createIcons();
     }
 
-    // Handles dynamically changing Question 2's options based on Question 1 mentor selection
     function updateStudentExpertiseOptions(expertId) {
       if (!activeSurveyProject || !activeSurveyProject.experts) return;
       const expert = activeSurveyProject.experts.find(e => e.id === expertId);
@@ -668,7 +671,7 @@
       if (titleEl) titleEl.innerText = `2. What specific expertise of ${expert.name} stood out to you?`;
 
       if (container) {
-        container.innerHTML = expert.expertise.map(skill => `
+        container.innerHTML = (expert.expertise || []).map(skill => `
           <label class="flex items-center space-x-3 p-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-slate-700 cursor-pointer transition-all">
             <input type="checkbox" name="student_skills" value="${skill}" class="rounded border-slate-700 text-indigo-600 focus:ring-0" />
             <span class="text-xs text-slate-300">${skill}</span>
@@ -677,7 +680,6 @@
       }
     }
 
-    // AI Review Generation Handler
     async function handleGenerateReview(e) {
       e.preventDefault();
       if (!activeSurveyProject) return;
@@ -699,7 +701,7 @@
         }
         selectedOptions = checkedSkills;
       } else {
-        activeSurveyProject.questions.forEach(q => {
+        (activeSurveyProject.questions || []).forEach(q => {
           const checked = Array.from(document.querySelectorAll(`input[name="${q.id}"]:checked`)).map(c => c.value);
           if (checked.length) selectedOptions.push(...checked);
         });
@@ -716,7 +718,7 @@
       const btn = document.getElementById('survey-submit-btn');
       const originalText = btn.innerHTML;
       btn.disabled = true;
-      btn.innerHTML = `<span class="inline-block animate-spin mr-2">⚙</span> Drafting Storytelling Review...`;
+      btn.innerHTML = `<span class="inline-block animate-spin mr-2">⚙</span> Generating Review...`;
 
       try {
         const response = await fetch('/api/generate-review', {
@@ -755,7 +757,7 @@
     async function regenerateVariation() {
       if (!activeSurveyProject || !cachedSelectedOptions.length) return;
       const txtArea = document.getElementById('generated-review-text');
-      showToast('Crafting fresh recommendation draft...', 'info');
+      showToast('Generating fresh variation...', 'info');
 
       try {
         const response = await fetch('/api/generate-review', {
@@ -808,6 +810,7 @@
     window.onload = () => {
       init();
       addQuestionBlock();
+      toggleProjectMode();
       const params = new URLSearchParams(window.location.search);
       const projId = params.get('project_id');
       if (projId) navigateTo('survey', projId);
