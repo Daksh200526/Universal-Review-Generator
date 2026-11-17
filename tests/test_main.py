@@ -1,6 +1,7 @@
 import asyncio
 import tempfile
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 
 from fastapi import HTTPException
@@ -91,6 +92,31 @@ class ReviewGenerationTests(unittest.TestCase):
         self.assertEqual(invalid.exception.status_code, 400)
 
         generated = self.generate("validated")
+        self.assertEqual(generated["reviewCount"], 1)
+
+    def test_limit_reopens_after_midnight_in_configured_timezone(self):
+        self.create_project("daily", 1)
+        start, end = main.review_day_bounds()
+        with main.connect_database() as connection:
+            connection.execute(
+                """
+                INSERT INTO reviews
+                    (id, project_id, status, review_text, selected_options_json, created_at)
+                VALUES (?, ?, 'completed', ?, ?, ?)
+                """,
+                (
+                    "yesterday-review",
+                    "daily",
+                    "Old draft",
+                    '["Helpful service"]',
+                    start - 1,
+                ),
+            )
+
+        boundary = datetime.fromtimestamp(start, main.REVIEW_LIMIT_TIMEZONE)
+        self.assertEqual(main.review_day_bounds(boundary), (start, end))
+        generated = self.generate("daily")
+
         self.assertEqual(generated["reviewCount"], 1)
 
     def test_project_survey_has_no_student_or_admin_project_mode(self):

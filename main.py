@@ -5,7 +5,9 @@ import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from typing import List, Literal, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -21,6 +23,17 @@ client = OpenAI(api_key=api_key) if api_key else None
 BASE_DIR = os.path.dirname(__file__)
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DATABASE_PATH = os.environ.get("DATABASE_PATH", os.path.join(BASE_DIR, "reviews.sqlite3"))
+REVIEW_LIMIT_TIMEZONE_NAME = os.environ.get(
+    "REVIEW_LIMIT_TIMEZONE", "Asia/Kolkata"
+)
+try:
+    REVIEW_LIMIT_TIMEZONE = ZoneInfo(REVIEW_LIMIT_TIMEZONE_NAME)
+except ZoneInfoNotFoundError as error:
+    raise RuntimeError(
+        f"Unknown REVIEW_LIMIT_TIMEZONE: {REVIEW_LIMIT_TIMEZONE_NAME}"
+    ) from error
+
+
 @contextmanager
 def connect_database():
     connection = sqlite3.connect(DATABASE_PATH, timeout=10)
@@ -56,8 +69,8 @@ def initialize_database():
                 selected_options_json TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS reviews_project_status
-                ON reviews(project_id, status);
+            CREATE INDEX IF NOT EXISTS reviews_project_created_status
+                ON reviews(project_id, created_at, status);
             """
         )
 
@@ -95,19 +108,33 @@ def project_record(row, include_usage=False):
     }
     if include_usage:
         record["reviewCount"] = row["review_count"]
+        record["reviewLimitTimezone"] = REVIEW_LIMIT_TIMEZONE_NAME
+        _, record["reviewLimitResetAt"] = review_day_bounds()
     return record
 
 
-def get_project_with_count(connection, project_id):
+def review_day_bounds(now=None):
+    if now is None:
+        now = datetime.now(REVIEW_LIMIT_TIMEZONE)
+    local_now = now.astimezone(REVIEW_LIMIT_TIMEZONE)
+    start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    return int(start.timestamp()), int(end.timestamp())
+
+
+def get_project_with_count(connection, project_id, now=None):
+    start, end = review_day_bounds(now)
     return connection.execute(
         """
         SELECT p.*,
                (SELECT COUNT(*) FROM reviews r
-                WHERE r.project_id = p.id AND r.status IN ('pending', 'completed'))
+                WHERE r.project_id = p.id
+                  AND r.status IN ('pending', 'completed')
+                  AND r.created_at >= ? AND r.created_at < ?)
                    AS review_count
         FROM projects p WHERE p.id = ?
         """,
-        (project_id,),
+        (start, end, project_id),
     ).fetchone()
 
 
@@ -133,14 +160,17 @@ async def serve_index():
 
 @app.get("/api/projects")
 async def list_projects():
+    start, end = review_day_bounds()
     with connect_database() as connection:
         rows = connection.execute(
             """
             SELECT p.*,
                    (SELECT COUNT(*) FROM reviews r
-                    WHERE r.project_id = p.id AND r.status = 'completed') AS review_count
+                    WHERE r.project_id = p.id AND r.status = 'completed'
+                      AND r.created_at >= ? AND r.created_at < ?) AS review_count
             FROM projects p ORDER BY p.created_at DESC
-            """
+            """,
+            (start, end),
         ).fetchall()
     return [project_record(row, include_usage=True) for row in rows]
 
@@ -248,7 +278,10 @@ async def generate_review(req: ReviewRequest):
         if review_limit is not None and project["review_count"] >= review_limit:
             raise HTTPException(
                 status_code=429,
-                detail="This project has reached its review-generation limit.",
+                detail=(
+                    "This project has reached its daily review-generation limit. "
+                    f"It resets at midnight {REVIEW_LIMIT_TIMEZONE_NAME}."
+                ),
             )
 
         connection.execute(

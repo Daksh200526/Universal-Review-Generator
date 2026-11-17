@@ -131,7 +131,7 @@
             <option value="custom">Enter a number</option>
           </select>
           <input id="project-custom-limit" type="number" min="1" step="1" placeholder="Maximum number of reviews" class="hidden w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 text-white text-sm outline-none focus:border-indigo-500" />
-          <p class="text-xs text-slate-500">Counts successful review drafts per project, including regenerated variations. The limit is enforced across devices.</p>
+          <p class="text-xs text-slate-500">Counts successful drafts, including regenerated variations. The limit resets at midnight in the configured quota timezone and is enforced across devices.</p>
         </div>
 
         <div class="space-y-4 pt-4">
@@ -263,6 +263,7 @@
     let activeSurveyProject = null;
     let pendingDeleteId = null;
     let cachedSelectedOptions = [];
+    let quotaRefreshTimeout = null;
 
     async function api(path, options = {}) {
       const response = await fetch(path, {
@@ -389,6 +390,21 @@
       projects = await api('/api/projects');
       updateDashboardStats();
       renderProjectsGrid();
+      if (projects.length) scheduleQuotaRefresh(projects[0].reviewLimitResetAt);
+    }
+
+    function scheduleQuotaRefresh(resetAt) {
+      if (quotaRefreshTimeout) window.clearTimeout(quotaRefreshTimeout);
+      if (!resetAt) return;
+      const delay = Math.max(1000, resetAt * 1000 - Date.now() + 1000);
+      quotaRefreshTimeout = window.setTimeout(() => {
+        const projectId = new URLSearchParams(window.location.search).get('project_id');
+        if (projectId) {
+          loadSurveyView(projectId);
+        } else {
+          loadProjects().catch(error => showToast(error.message, 'error'));
+        }
+      }, delay);
     }
 
     function updateDashboardStats() {
@@ -494,7 +510,7 @@
       projects.forEach(project => {
         const card = document.createElement('div');
         const limitLabel = project.reviewLimit === null ? 'Unlimited' : project.reviewLimit;
-        const usageLabel = `${project.reviewCount || 0} / ${limitLabel} reviews`;
+        const usageLabel = `${project.reviewCount || 0} / ${limitLabel} today · resets at midnight ${project.reviewLimitTimezone}`;
         card.className = 'glassmorphism border border-slate-800 rounded-2xl p-6 flex flex-col justify-between space-y-4 hover:border-slate-700 transition-all';
         card.innerHTML = `
           <div>
@@ -602,6 +618,7 @@
       try {
         activeSurveyProject = await api(`/api/public/projects/${encodeURIComponent(id)}`);
         const project = activeSurveyProject;
+        scheduleQuotaRefresh(project.reviewLimitResetAt);
         document.getElementById('survey-title').innerText = project.title;
         document.getElementById('survey-badge').innerText = 'Customer Experience';
         document.getElementById('survey-subtitle').innerText = 'Select details that reflect your own experience to create a draft you can review and edit.';
@@ -634,7 +651,7 @@
         submit.disabled = atLimit;
         submit.classList.toggle('opacity-50', atLimit);
         if (atLimit) {
-          document.getElementById('review-limit-notice').innerText = 'This project has reached its review-generation limit.';
+          document.getElementById('review-limit-notice').innerText = `This project has reached its daily review-generation limit. It resets at midnight ${project.reviewLimitTimezone}.`;
           document.getElementById('review-limit-notice').classList.remove('hidden');
         }
         lucide.createIcons();
@@ -674,7 +691,7 @@
         document.getElementById('regenerate-review-btn').disabled = atLimit;
         button.disabled = atLimit;
         if (atLimit) {
-          document.getElementById('review-limit-notice').innerText = 'This project has reached its review-generation limit.';
+          document.getElementById('review-limit-notice').innerText = `This project has reached its daily review-generation limit. It resets at midnight ${activeSurveyProject.reviewLimitTimezone}.`;
           document.getElementById('review-limit-notice').classList.remove('hidden');
         }
         lucide.createIcons();
@@ -710,7 +727,7 @@
         document.getElementById('survey-submit-btn').disabled = atLimit;
         document.getElementById('regenerate-review-btn').disabled = atLimit;
         if (atLimit) {
-          document.getElementById('review-limit-notice').innerText = 'This project has reached its review-generation limit.';
+          document.getElementById('review-limit-notice').innerText = `This project has reached its daily review-generation limit. It resets at midnight ${activeSurveyProject.reviewLimitTimezone}.`;
           document.getElementById('review-limit-notice').classList.remove('hidden');
         }
         showToast('Draft regenerated. Please review it for accuracy before posting.');
