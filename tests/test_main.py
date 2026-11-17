@@ -2,6 +2,8 @@ import asyncio
 import tempfile
 import unittest
 from datetime import datetime
+from html.parser import HTMLParser
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import HTTPException
@@ -19,6 +21,20 @@ class FakeCompletions:
                 )
             ]
         )
+
+
+class FormSubmitParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.forms = {}
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "form":
+            return
+        attributes = dict(attrs)
+        form_id = attributes.get("id")
+        if form_id in {"project-form", "survey-form"}:
+            self.forms[form_id] = attributes
 
 
 class ReviewGenerationTests(unittest.TestCase):
@@ -132,6 +148,21 @@ class ReviewGenerationTests(unittest.TestCase):
             response = client.get("/api/projects")
             self.assertEqual(response.status_code, 200)
             self.assertNotIn("/api/auth/login", {route.path for route in main.app.routes})
+
+    def test_project_and_survey_forms_register_submit_handlers_once(self):
+        html = (Path(main.STATIC_DIR) / "index.html").read_text(encoding="utf-8")
+        parser = FormSubmitParser()
+        parser.feed(html)
+
+        self.assertEqual(set(parser.forms), {"project-form", "survey-form"})
+        self.assertNotIn("onsubmit", parser.forms["project-form"])
+        self.assertNotIn("onsubmit", parser.forms["survey-form"])
+        self.assertEqual(
+            html.count("addEventListener('submit', handleSaveProject)"), 1
+        )
+        self.assertEqual(
+            html.count("addEventListener('submit', handleGenerateReview)"), 1
+        )
 
 
 if __name__ == "__main__":
