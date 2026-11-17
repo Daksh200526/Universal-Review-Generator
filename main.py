@@ -1,16 +1,13 @@
-import hashlib
-import hmac
 import json
 import logging
 import os
-import secrets
 import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
 from typing import List, Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field, HttpUrl
@@ -24,10 +21,6 @@ client = OpenAI(api_key=api_key) if api_key else None
 BASE_DIR = os.path.dirname(__file__)
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DATABASE_PATH = os.environ.get("DATABASE_PATH", os.path.join(BASE_DIR, "reviews.sqlite3"))
-SESSION_COOKIE = "urg_admin_session"
-SESSION_TTL_SECONDS = 12 * 60 * 60
-
-
 @contextmanager
 def connect_database():
     connection = sqlite3.connect(DATABASE_PATH, timeout=10)
@@ -65,10 +58,6 @@ def initialize_database():
             );
             CREATE INDEX IF NOT EXISTS reviews_project_status
                 ON reviews(project_id, status);
-            CREATE TABLE IF NOT EXISTS admin_sessions (
-                token_hash TEXT PRIMARY KEY,
-                expires_at INTEGER NOT NULL
-            );
             """
         )
 
@@ -94,29 +83,6 @@ class ProjectRequest(BaseModel):
 class ReviewRequest(BaseModel):
     project_id: str
     selected_options: List[str] = Field(min_length=1)
-
-
-class LoginRequest(BaseModel):
-    password: str
-
-
-def require_admin(request: Request):
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
-        raise HTTPException(status_code=401, detail="Admin sign-in is required.")
-
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    now = int(time.time())
-    with connect_database() as connection:
-        session = connection.execute(
-            "SELECT expires_at FROM admin_sessions WHERE token_hash = ?",
-            (token_hash,),
-        ).fetchone()
-        if not session or session["expires_at"] <= now:
-            connection.execute(
-                "DELETE FROM admin_sessions WHERE token_hash = ?", (token_hash,)
-            )
-            raise HTTPException(status_code=401, detail="Admin session has expired.")
 
 
 def project_record(row, include_usage=False):
@@ -165,64 +131,8 @@ async def serve_index():
     return {"message": "index.html not found in static folder."}
 
 
-@app.post("/api/auth/login")
-async def admin_login(req: LoginRequest, request: Request, response: Response):
-    admin_password = os.environ.get("ADMIN_PASSWORD")
-    if not admin_password:
-        raise HTTPException(
-            status_code=503,
-            detail="Admin sign-in is not configured. Set ADMIN_PASSWORD on the server.",
-        )
-    if not hmac.compare_digest(req.password, admin_password):
-        raise HTTPException(status_code=401, detail="Incorrect admin password.")
-
-    token = secrets.token_urlsafe(32)
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    expires_at = int(time.time()) + SESSION_TTL_SECONDS
-    with connect_database() as connection:
-        connection.execute(
-            "INSERT INTO admin_sessions(token_hash, expires_at) VALUES (?, ?)",
-            (token_hash, expires_at),
-        )
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        secure=request.url.scheme == "https"
-        or request.headers.get("x-forwarded-proto") == "https",
-        samesite="strict",
-        max_age=SESSION_TTL_SECONDS,
-        path="/",
-    )
-    return {"authenticated": True}
-
-
-@app.get("/api/auth/session")
-async def admin_session_status(request: Request):
-    try:
-        require_admin(request)
-        return {"authenticated": True}
-    except HTTPException as error:
-        if error.status_code != 401:
-            raise
-        return {"authenticated": False}
-
-
-@app.post("/api/auth/logout")
-async def admin_logout(request: Request, response: Response):
-    token = request.cookies.get(SESSION_COOKIE)
-    if token:
-        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        with connect_database() as connection:
-            connection.execute(
-                "DELETE FROM admin_sessions WHERE token_hash = ?", (token_hash,)
-            )
-    response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="strict")
-    return {"authenticated": False}
-
-
 @app.get("/api/projects")
-async def list_projects(_admin=Depends(require_admin)):
+async def list_projects():
     with connect_database() as connection:
         rows = connection.execute(
             """
@@ -236,7 +146,7 @@ async def list_projects(_admin=Depends(require_admin)):
 
 
 @app.post("/api/projects")
-async def create_project(req: ProjectRequest, _admin=Depends(require_admin)):
+async def create_project(req: ProjectRequest):
     title = req.title.strip()
     if not title:
         raise HTTPException(status_code=422, detail="Project title cannot be empty.")
@@ -265,7 +175,7 @@ async def create_project(req: ProjectRequest, _admin=Depends(require_admin)):
 
 
 @app.delete("/api/projects/{project_id}")
-async def delete_project(project_id: str, _admin=Depends(require_admin)):
+async def delete_project(project_id: str):
     with connect_database() as connection:
         cursor = connection.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         if cursor.rowcount == 0:
@@ -274,7 +184,7 @@ async def delete_project(project_id: str, _admin=Depends(require_admin)):
 
 
 @app.get("/api/projects/{project_id}/reviews")
-async def list_project_reviews(project_id: str, _admin=Depends(require_admin)):
+async def list_project_reviews(project_id: str):
     with connect_database() as connection:
         if not connection.execute(
             "SELECT 1 FROM projects WHERE id = ?", (project_id,)

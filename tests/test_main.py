@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 import main
 
@@ -53,7 +54,7 @@ class ReviewGenerationTests(unittest.TestCase):
                 )
             ],
         )
-        return self.run_async(main.create_project(request, _admin=True))
+        return self.run_async(main.create_project(request))
 
     def generate(self, project_id, option="Helpful service"):
         request = main.ReviewRequest(
@@ -73,10 +74,10 @@ class ReviewGenerationTests(unittest.TestCase):
 
         self.generate("unlimited")
         limited_history = self.run_async(
-            main.list_project_reviews("limited", _admin=True)
+            main.list_project_reviews("limited")
         )
         unlimited_history = self.run_async(
-            main.list_project_reviews("unlimited", _admin=True)
+            main.list_project_reviews("unlimited")
         )
         self.assertEqual(len(limited_history), 1)
         self.assertEqual(limited_history[0]["review"], "My experience was helpful.")
@@ -99,6 +100,12 @@ class ReviewGenerationTests(unittest.TestCase):
         self.assertIn("questions", public_project)
         self.assertNotIn("mode", public_project)
         self.assertNotIn("experts", public_project)
+
+    def test_admin_project_api_is_available_without_sign_in(self):
+        with TestClient(main.app) as client:
+            response = client.get("/api/projects")
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("/api/auth/login", {route.path for route in main.app.routes})
 
 
 if __name__ == "__main__":

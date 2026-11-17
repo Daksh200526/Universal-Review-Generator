@@ -21,7 +21,7 @@
 <body class="bg-[#0b0f19] text-slate-100 min-h-screen flex flex-col selection:bg-indigo-500 selection:text-white">
 
   <!-- Navigation Bar -->
-  <nav id="admin-nav" class="hidden border-b border-slate-800/80 bg-[#0b0f19]/80 backdrop-blur-md sticky top-0 z-40">
+  <nav id="admin-nav" class="border-b border-slate-800/80 bg-[#0b0f19]/80 backdrop-blur-md sticky top-0 z-40">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
       <div class="flex items-center space-x-3 cursor-pointer" onclick="navigateTo('dashboard')">
         <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
@@ -42,7 +42,6 @@
         <button onclick="navigateTo('create-project')" class="inline-flex items-center px-4 py-2 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition-all shadow-md shadow-indigo-600/30">
           <i data-lucide="plus" class="w-4 h-4 mr-1.5"></i> Create New Project
         </button>
-        <button id="admin-logout" class="px-3 py-2 rounded-lg text-sm font-medium hover:text-white text-slate-400 transition-colors">Sign out</button>
       </div>
     </div>
   </nav>
@@ -50,30 +49,8 @@
   <!-- Notification Container -->
   <div id="toast-container" class="fixed top-20 right-4 z-50 flex flex-col space-y-2 pointer-events-none"></div>
 
-  <section id="login-view" class="flex-1 flex items-center justify-center px-4 py-12">
-    <div class="w-full max-w-md glassmorphism border border-slate-800 rounded-3xl p-8 space-y-6">
-      <div class="text-center space-y-2">
-        <div class="w-14 h-14 mx-auto rounded-2xl bg-indigo-600 flex items-center justify-center">
-          <i data-lucide="shield-check" class="w-7 h-7 text-white"></i>
-        </div>
-        <h1 class="text-2xl font-bold text-white">Welcome to URG</h1>
-        <p class="text-sm text-slate-400">Choose how you want to continue.</p>
-      </div>
-      <button id="show-admin-login" type="button" class="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold">
-        Admin Mode
-      </button>
-      <form id="admin-login-form" class="hidden space-y-4">
-        <label class="block text-sm font-medium text-slate-300" for="admin-password">Admin password</label>
-        <input id="admin-password" type="password" required autocomplete="current-password" class="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-white outline-none focus:border-indigo-500" />
-        <button id="admin-login-submit" type="submit" class="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold">Sign in</button>
-      </form>
-      <p id="login-error" class="hidden text-sm text-red-400 text-center" role="alert"></p>
-      <p class="text-xs text-slate-500 text-center">Customers can open a survey by scanning its project QR code.</p>
-    </div>
-  </section>
-
   <!-- Main View Container -->
-  <main id="app-main" class="hidden flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <main id="app-main" class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
     
     <!-- DASHBOARD VIEW -->
     <section id="view-dashboard" class="space-y-8">
@@ -306,13 +283,6 @@
 
     async function init() {
       lucide.createIcons();
-      document.getElementById('show-admin-login').addEventListener('click', () => {
-        document.getElementById('show-admin-login').classList.add('hidden');
-        document.getElementById('admin-login-form').classList.remove('hidden');
-        document.getElementById('admin-password').focus();
-      });
-      document.getElementById('admin-login-form').addEventListener('submit', handleAdminLogin);
-      document.getElementById('admin-logout').addEventListener('click', handleAdminLogout);
       document.getElementById('project-review-limit').addEventListener('change', updateLimitInput);
       document.getElementById('project-form').addEventListener('submit', handleSaveProject);
       document.getElementById('survey-form').addEventListener('submit', handleGenerateReview);
@@ -329,58 +299,19 @@
 
       const projectId = new URLSearchParams(window.location.search).get('project_id');
       if (projectId) {
-        document.getElementById('login-view').classList.add('hidden');
         document.getElementById('admin-nav').classList.add('hidden');
-        document.getElementById('app-main').classList.remove('hidden');
         await navigateTo('survey', projectId);
         return;
       }
 
       try {
-        const session = await api('/api/auth/session');
-        if (session.authenticated) {
-          await showAdminApp();
-        }
-      } catch (error) {
-        showLoginError(error.message);
-      }
-    }
-
-    async function handleAdminLogin(event) {
-      event.preventDefault();
-      const button = document.getElementById('admin-login-submit');
-      button.disabled = true;
-      try {
-        await api('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: document.getElementById('admin-password').value })
-        });
         await showAdminApp();
-      } catch (error) {
-        showLoginError(error.message);
-      } finally {
-        button.disabled = false;
-      }
-    }
-
-    async function handleAdminLogout() {
-      try {
-        await api('/api/auth/logout', { method: 'POST' });
-        projects = [];
-        document.getElementById('admin-nav').classList.add('hidden');
-        document.getElementById('app-main').classList.add('hidden');
-        document.getElementById('login-view').classList.remove('hidden');
-        document.getElementById('show-admin-login').classList.remove('hidden');
-        document.getElementById('admin-login-form').classList.add('hidden');
-        document.getElementById('admin-password').value = '';
       } catch (error) {
         showToast(error.message, 'error');
       }
     }
 
     async function showAdminApp() {
-      document.getElementById('login-view').classList.add('hidden');
       document.getElementById('admin-nav').classList.remove('hidden');
       document.getElementById('app-main').classList.remove('hidden');
       await migrateLegacyProjects();
@@ -458,12 +389,6 @@
       projects = await api('/api/projects');
       updateDashboardStats();
       renderProjectsGrid();
-    }
-
-    function showLoginError(message) {
-      const element = document.getElementById('login-error');
-      element.textContent = message;
-      element.classList.remove('hidden');
     }
 
     function updateDashboardStats() {
