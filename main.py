@@ -1,32 +1,160 @@
+import hashlib
+import hmac
+import json
+import logging
 import os
-from typing import List, Optional
-from fastapi import FastAPI, HTTPException
+import secrets
+import sqlite3
+import time
+import uuid
+from contextlib import contextmanager
+from typing import List, Literal, Optional
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 from openai import OpenAI
+from pydantic import BaseModel, Field, HttpUrl
 
 app = FastAPI(title="Universal Review Generator")
+logger = logging.getLogger(__name__)
 
 api_key = os.environ.get("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key) if api_key else None
 
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+BASE_DIR = os.path.dirname(__file__)
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+DATABASE_PATH = os.environ.get("DATABASE_PATH", os.path.join(BASE_DIR, "reviews.sqlite3"))
+SESSION_COOKIE = "urg_admin_session"
+SESSION_TTL_SECONDS = 12 * 60 * 60
+
+
+@contextmanager
+def connect_database():
+    connection = sqlite3.connect(DATABASE_PATH, timeout=10)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def initialize_database():
+    with connect_database() as connection:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                redirect_url TEXT NOT NULL,
+                review_limit INTEGER,
+                questions_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS reviews (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                status TEXT NOT NULL,
+                review_text TEXT NOT NULL DEFAULT '',
+                selected_options_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS reviews_project_status
+                ON reviews(project_id, status);
+            CREATE TABLE IF NOT EXISTS admin_sessions (
+                token_hash TEXT PRIMARY KEY,
+                expires_at INTEGER NOT NULL
+            );
+            """
+        )
+
+
+initialize_database()
+
+
+class Question(BaseModel):
+    id: str
+    text: str
+    type: Literal["single", "multiple"]
+    options: List[str] = Field(min_length=1)
+
+
+class ProjectRequest(BaseModel):
+    id: Optional[str] = None
+    title: str = Field(min_length=1, max_length=200)
+    redirectUrl: HttpUrl
+    reviewLimit: Optional[int] = Field(default=None, ge=1)
+    questions: List[Question] = Field(default_factory=list)
+
+
+class ReviewRequest(BaseModel):
+    project_id: str
+    selected_options: List[str] = Field(min_length=1)
+
+
+class LoginRequest(BaseModel):
+    password: str
+
+
+def require_admin(request: Request):
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        raise HTTPException(status_code=401, detail="Admin sign-in is required.")
+
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = int(time.time())
+    with connect_database() as connection:
+        session = connection.execute(
+            "SELECT expires_at FROM admin_sessions WHERE token_hash = ?",
+            (token_hash,),
+        ).fetchone()
+        if not session or session["expires_at"] <= now:
+            connection.execute(
+                "DELETE FROM admin_sessions WHERE token_hash = ?", (token_hash,)
+            )
+            raise HTTPException(status_code=401, detail="Admin session has expired.")
+
+
+def project_record(row, include_usage=False):
+    record = {
+        "id": row["id"],
+        "title": row["title"],
+        "redirectUrl": row["redirect_url"],
+        "reviewLimit": row["review_limit"],
+        "questions": json.loads(row["questions_json"]),
+    }
+    if include_usage:
+        record["reviewCount"] = row["review_count"]
+    return record
+
+
+def get_project_with_count(connection, project_id):
+    return connection.execute(
+        """
+        SELECT p.*,
+               (SELECT COUNT(*) FROM reviews r
+                WHERE r.project_id = p.id AND r.status IN ('pending', 'completed'))
+                   AS review_count
+        FROM projects p WHERE p.id = ?
+        """,
+        (project_id,),
+    ).fetchone()
 
 
 @app.get("/static/{file_path:path}")
 async def serve_static_file(file_path: str):
     static_root = os.path.realpath(STATIC_DIR)
     requested_file = os.path.realpath(os.path.join(static_root, file_path))
-    if os.path.commonpath([static_root, requested_file]) != static_root or not os.path.isfile(requested_file):
+    if (
+        os.path.commonpath([static_root, requested_file]) != static_root
+        or not os.path.isfile(requested_file)
+    ):
         raise HTTPException(status_code=404, detail="Static file not found.")
     return FileResponse(requested_file)
-
-
-class ReviewRequest(BaseModel):
-    business_name: str
-    mode: str = "customer"  # "customer" or "student"
-    selected_options: List[str]
-    expert_name: Optional[str] = None
 
 
 @app.get("/")
@@ -37,61 +165,238 @@ async def serve_index():
     return {"message": "index.html not found in static folder."}
 
 
+@app.post("/api/auth/login")
+async def admin_login(req: LoginRequest, request: Request, response: Response):
+    admin_password = os.environ.get("ADMIN_PASSWORD")
+    if not admin_password:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin sign-in is not configured. Set ADMIN_PASSWORD on the server.",
+        )
+    if not hmac.compare_digest(req.password, admin_password):
+        raise HTTPException(status_code=401, detail="Incorrect admin password.")
+
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    expires_at = int(time.time()) + SESSION_TTL_SECONDS
+    with connect_database() as connection:
+        connection.execute(
+            "INSERT INTO admin_sessions(token_hash, expires_at) VALUES (?, ?)",
+            (token_hash, expires_at),
+        )
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        httponly=True,
+        secure=request.url.scheme == "https"
+        or request.headers.get("x-forwarded-proto") == "https",
+        samesite="strict",
+        max_age=SESSION_TTL_SECONDS,
+        path="/",
+    )
+    return {"authenticated": True}
+
+
+@app.get("/api/auth/session")
+async def admin_session_status(request: Request):
+    try:
+        require_admin(request)
+        return {"authenticated": True}
+    except HTTPException as error:
+        if error.status_code != 401:
+            raise
+        return {"authenticated": False}
+
+
+@app.post("/api/auth/logout")
+async def admin_logout(request: Request, response: Response):
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        with connect_database() as connection:
+            connection.execute(
+                "DELETE FROM admin_sessions WHERE token_hash = ?", (token_hash,)
+            )
+    response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="strict")
+    return {"authenticated": False}
+
+
+@app.get("/api/projects")
+async def list_projects(_admin=Depends(require_admin)):
+    with connect_database() as connection:
+        rows = connection.execute(
+            """
+            SELECT p.*,
+                   (SELECT COUNT(*) FROM reviews r
+                    WHERE r.project_id = p.id AND r.status = 'completed') AS review_count
+            FROM projects p ORDER BY p.created_at DESC
+            """
+        ).fetchall()
+    return [project_record(row, include_usage=True) for row in rows]
+
+
+@app.post("/api/projects")
+async def create_project(req: ProjectRequest, _admin=Depends(require_admin)):
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Project title cannot be empty.")
+    if not req.questions:
+        raise HTTPException(status_code=422, detail="Add at least one survey question.")
+
+    project_id = req.id or f"proj_{uuid.uuid4().hex}"
+    with connect_database() as connection:
+        connection.execute(
+            """
+            INSERT INTO projects
+                (id, title, redirect_url, review_limit, questions_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project_id,
+                title,
+                str(req.redirectUrl),
+                req.reviewLimit,
+                json.dumps([question.model_dump() for question in req.questions]),
+                int(time.time()),
+            ),
+        )
+        row = get_project_with_count(connection, project_id)
+    return project_record(row, include_usage=True)
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str, _admin=Depends(require_admin)):
+    with connect_database() as connection:
+        cursor = connection.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Project not found.")
+    return {"deleted": True}
+
+
+@app.get("/api/projects/{project_id}/reviews")
+async def list_project_reviews(project_id: str, _admin=Depends(require_admin)):
+    with connect_database() as connection:
+        if not connection.execute(
+            "SELECT 1 FROM projects WHERE id = ?", (project_id,)
+        ).fetchone():
+            raise HTTPException(status_code=404, detail="Project not found.")
+        rows = connection.execute(
+            """
+            SELECT id, review_text, selected_options_json, created_at
+            FROM reviews WHERE project_id = ? AND status = 'completed'
+            ORDER BY created_at DESC
+            """,
+            (project_id,),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "review": row["review_text"],
+            "selectedOptions": json.loads(row["selected_options_json"]),
+            "createdAt": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
+@app.get("/api/public/projects/{project_id}")
+async def get_public_project(project_id: str):
+    with connect_database() as connection:
+        row = get_project_with_count(connection, project_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    return project_record(row, include_usage=True)
+
+
 @app.post("/api/generate-review")
 async def generate_review(req: ReviewRequest):
     if not client:
         raise HTTPException(
-            status_code=500,
-            detail="OPENAI_API_KEY is not configured on the server."
+            status_code=503,
+            detail="OPENAI_API_KEY is not configured on the server.",
         )
 
-    if req.mode == "student":
-        system_prompt = (
-            "You are a real student or candidate writing an authentic, heartfelt recommendation "
-            "for mentorship/counseling. Your tone must be personal, relatable, storytelling-driven, "
-            "and sound like one student giving trusted peer-to-peer advice to another student who was "
-            "in the exact same confused or uncertain situation. Avoid sounding like a formal corporate advertisement. "
-            "Output ONLY the review text with no quotes, headings, or introductory pleasantries."
+    review_id = f"review_{uuid.uuid4().hex}"
+    with connect_database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        project = get_project_with_count(connection, req.project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found.")
+
+        questions = json.loads(project["questions_json"])
+        valid_options = {
+            option
+            for question in questions
+            for option in question["options"]
+        }
+
+        if any(option not in valid_options for option in req.selected_options):
+            raise HTTPException(
+                status_code=400, detail="Select only options from this project."
+            )
+        review_limit = project["review_limit"]
+        if review_limit is not None and project["review_count"] >= review_limit:
+            raise HTTPException(
+                status_code=429,
+                detail="This project has reached its review-generation limit.",
+            )
+
+        connection.execute(
+            """
+            INSERT INTO reviews
+                (id, project_id, status, selected_options_json, created_at)
+            VALUES (?, ?, 'pending', ?, ?)
+            """,
+            (
+                review_id,
+                req.project_id,
+                json.dumps(req.selected_options),
+                int(time.time()),
+            ),
         )
 
-        user_prompt = f"""
-Platform / Institution / Service: {req.business_name}
-Mentor / Expert Consulted: {req.expert_name or 'the counselor'}
-Specific expertise and aspects experienced:
-{", ".join(req.selected_options)}
-
-Write a concise 3 to 5 sentence personal testimonial. Start with where the student was initially feeling stuck or looking for direction, how consulting {req.expert_name or 'the expert'} made everything clear, and directly urge other students in the same boat to reach out to them.
-"""
-    else:
-        # Standard customer mode
-        system_prompt = (
-            "You are an authentic, satisfied customer writing a genuine, positive public review "
-            "for a local business. Write natural, conversational sentences without sounding robotic, "
-            "repetitive, or like an advertisement billboard. Output ONLY the review text with no quotes or intros."
-        )
-
-        user_prompt = f"""
-Business Name: {req.business_name}
-Specific positive details I experienced:
-{", ".join(req.selected_options)}
-
-Write a concise 2 to 4 sentence 5-star review smoothly weaving in these details.
-"""
+    system_prompt = (
+        "Help someone express their own genuine experience in a clear, natural way. "
+        "Use only the details they selected; do not invent facts, make comparative claims, "
+        "or add a rating. Return only a concise first-person draft."
+    )
+    user_prompt = (
+        f"Organization: {project['title']}\n"
+        f"Details from the person's experience: {', '.join(req.selected_options)}\n"
+        "Write a concise first-person draft that reflects these details."
+    )
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ],
-            temperature=0.88,
-            max_tokens=260
+            temperature=0.7,
+            max_tokens=260,
         )
-        review_text = response.choices[0].message.content.strip().strip('"')
-        return {"review": review_text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+        review_text = (response.choices[0].message.content or "").strip().strip('"')
+        if not review_text:
+            raise RuntimeError("The review provider returned an empty response.")
+        with connect_database() as connection:
+            connection.execute(
+                "UPDATE reviews SET status = 'completed', review_text = ? WHERE id = ?",
+                (review_text, review_id),
+            )
+            updated_project = get_project_with_count(connection, req.project_id)
+        return {
+            "review": review_text,
+            "reviewCount": updated_project["review_count"],
+        }
+    except Exception as error:
+        with connect_database() as connection:
+            connection.execute(
+                "DELETE FROM reviews WHERE id = ? AND status = 'pending'",
+                (review_id,),
+            )
+        logger.exception("Review generation failed for project %s", req.project_id)
+        raise HTTPException(status_code=502, detail="Review generation failed.") from error
 
 
 @app.get("/healthz")
