@@ -107,6 +107,10 @@ class DesignRequest(BaseModel):
     design: dict = Field(default_factory=dict)
 
 
+class DesignImageRequest(BaseModel):
+    imageDataUrl: str = Field(min_length=30, max_length=8_000_000)
+
+
 def project_record(row, include_usage=False):
     record = {
         "id": row["id"],
@@ -238,6 +242,54 @@ async def update_project_design(project_id: str, req: DesignRequest):
             raise HTTPException(status_code=404, detail="Project not found.")
         row = get_project_with_count(connection, project_id)
     return project_record(row, include_usage=True)
+
+
+@app.post("/api/projects/{project_id}/design-from-image")
+async def create_design_from_image(project_id: str, req: DesignImageRequest):
+    if not client:
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured on the server.")
+    image_data = req.imageDataUrl
+    match = re.fullmatch(r"data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)", image_data)
+    if not match:
+        raise HTTPException(status_code=422, detail="Upload a PNG, JPEG, or WebP image.")
+    with connect_database() as connection:
+        project = connection.execute("SELECT title, questions_json FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": (
+                    "You are a frontend designer. Recreate the visual design in the supplied reference image "
+                    "for an existing customer survey. Return JSON with keys accentColor, backgroundColor, "
+                    "fontFamily, customCss. customCss must be CSS only, scoped to #view-survey and its children, "
+                    "and use the existing survey elements #survey-title, #survey-subtitle, "
+                    "#survey-questions-mount, #survey-submit-btn, #review-output-container. Preserve all "
+                    "question text, options, and functionality. Match layout, spacing, colors, borders, typography, "
+                    "and button appearance as closely as possible. Do not create HTML or JavaScript. Use valid CSS."
+                )},
+                {"role": "user", "content": [
+                    {"type": "text", "text": f"Apply the reference visual design to this survey for {project['title']}. Questions: {project['questions_json']}"},
+                    {"type": "image_url", "image_url": {"url": image_data, "detail": "high"}},
+                ]},
+            ],
+            temperature=0.2,
+            max_tokens=3000,
+        )
+        design = json.loads(response.choices[0].message.content or "{}")
+        allowed = {"accentColor", "backgroundColor", "fontFamily", "customCss"}
+        design = {key: value[:12000] for key, value in design.items() if key in allowed and isinstance(value, str)}
+        if "customCss" not in design:
+            raise ValueError("The design model returned no CSS.")
+        for key in ("accentColor", "backgroundColor"):
+            if key in design and not re.fullmatch(r"#[0-9a-fA-F]{6}", design[key]):
+                design.pop(key)
+        return {"design": design}
+    except Exception as error:
+        logger.exception("Design generation failed for project %s", project_id)
+        raise HTTPException(status_code=502, detail="Could not create a design from that image.") from error
 
 
 @app.get("/api/projects/{project_id}/reviews")

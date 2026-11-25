@@ -260,16 +260,13 @@
     <div class="max-w-5xl mx-auto my-8 rounded-2xl bg-slate-900 border border-slate-700 p-6 space-y-5">
       <div class="flex justify-between items-center"><div><h3 class="text-xl font-bold">Update design</h3><p id="design-project-name" class="text-sm text-slate-400"></p></div><button onclick="closeDesignEditor()" class="p-2 text-slate-400">✕</button></div>
       <div class="grid md:grid-cols-2 gap-6">
-        <form id="design-form" class="space-y-3">
-          <label class="block text-xs text-slate-300">Accent color<input name="accentColor" type="color" class="block w-full h-10 mt-1 bg-slate-800 rounded"></label>
-          <label class="block text-xs text-slate-300">Page background<input name="backgroundColor" type="color" class="block w-full h-10 mt-1 bg-slate-800 rounded"></label>
-          <label class="block text-xs text-slate-300">Font family<input name="fontFamily" placeholder="Plus Jakarta Sans, sans-serif" class="w-full p-2 mt-1 rounded bg-slate-800 text-white"></label>
-          <label class="block text-xs text-slate-300">Logo image URL<input name="logoUrl" type="url" placeholder="https://..." class="w-full p-2 mt-1 rounded bg-slate-800 text-white"></label>
-          <label class="block text-xs text-slate-300">Survey subtitle<input name="subtitle" class="w-full p-2 mt-1 rounded bg-slate-800 text-white"></label>
-          <label class="block text-xs text-slate-300">Button text<input name="buttonText" class="w-full p-2 mt-1 rounded bg-slate-800 text-white"></label>
-          <label class="block text-xs text-slate-300">Custom CSS<textarea name="customCss" rows="7" placeholder="Use #view-survey, #survey-title, #survey-submit-btn, #survey-questions-mount ..." class="w-full p-2 mt-1 rounded bg-slate-800 text-white font-mono"></textarea></label>
-          <div class="flex gap-2"><button type="submit" class="px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold">Save design</button><button type="button" id="copy-designer-link" class="px-4 py-2 rounded-lg bg-slate-700 text-white">Copy designer link</button></div>
-        </form>
+        <div class="space-y-4">
+          <p class="text-sm text-slate-300">Upload the designer’s screenshot or a photo of the intended design. The app will recreate its visual style while keeping the project questions and survey behavior.</p>
+          <input id="design-reference-file" type="file" accept="image/png,image/jpeg,image/webp" class="block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-600 file:px-3 file:py-2 file:text-white">
+          <img id="design-reference-preview" class="hidden max-h-56 rounded-xl border border-slate-700 object-contain" alt="Uploaded design reference">
+          <div class="flex flex-wrap gap-2"><button type="button" id="generate-design-btn" class="px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold">Create preview from image</button><button type="button" id="apply-design-btn" disabled class="px-4 py-2 rounded-lg bg-emerald-600 text-white font-semibold disabled:opacity-40">Apply design</button><button type="button" id="copy-designer-link" class="px-4 py-2 rounded-lg bg-slate-700 text-white">Copy designer link</button></div>
+          <p id="design-status" class="text-xs text-slate-400" role="status"></p>
+        </div>
         <div><p class="text-xs text-slate-400 mb-2">Live preview</p><iframe id="design-preview" title="Survey design preview" class="w-full h-[560px] rounded-xl border border-slate-700 bg-[#0b0f19]"></iframe></div>
       </div>
     </div>
@@ -284,6 +281,7 @@
     let cachedSelectedOptions = [];
     let quotaRefreshTimeout = null;
     let designProject = null;
+    let pendingGeneratedDesign = null;
 
     async function api(path, options = {}) {
       const response = await fetch(path, {
@@ -308,7 +306,9 @@
       document.getElementById('project-form').addEventListener('submit', handleSaveProject);
       document.getElementById('survey-form').addEventListener('submit', handleGenerateReview);
       document.getElementById('confirm-delete-btn').addEventListener('click', deleteProject);
-      document.getElementById('design-form').addEventListener('submit', saveDesign);
+      document.getElementById('generate-design-btn').addEventListener('click', generateDesignFromImage);
+      document.getElementById('apply-design-btn').addEventListener('click', saveDesign);
+      document.getElementById('design-reference-file').addEventListener('change', showDesignReference);
       document.getElementById('copy-designer-link').addEventListener('click', copyDesignerLink);
       document.getElementById('project-reviews-list').addEventListener('click', event => {
         if (event.target.closest('[data-copy-review]')) {
@@ -589,51 +589,73 @@
 
     function openDesignEditor(project) {
       designProject = project;
+      pendingGeneratedDesign = null;
       document.getElementById('design-project-name').textContent = project.title;
-      const form = document.getElementById('design-form');
-      const design = project.design || {};
-      for (const field of form.elements) if (field.name) field.value = design[field.name] || ({accentColor:'#6366f1', backgroundColor:'#0b0f19'}[field.name] || '');
+      document.getElementById('design-status').textContent = '';
+      document.getElementById('apply-design-btn').disabled = true;
+      document.getElementById('design-reference-file').value = '';
+      document.getElementById('design-reference-preview').classList.add('hidden');
       document.getElementById('design-modal').classList.remove('hidden');
       const preview = document.getElementById('design-preview');
       preview.src = `/?project_id=${encodeURIComponent(project.id)}&design_preview=1`;
-      form.oninput = () => applyDesignToPreview();
-      preview.onload = () => applyDesignToPreview();
     }
 
-    function readDesignForm() {
-      const form = document.getElementById('design-form');
-      return Object.fromEntries(Array.from(form.elements).filter(item => item.name).map(item => [item.name, item.value.trim()]));
+    function showDesignReference(event) {
+      const file = event.target.files[0];
+      const preview = document.getElementById('design-reference-preview');
+      preview.classList.toggle('hidden', !file);
+      if (file) preview.src = URL.createObjectURL(file);
+      pendingGeneratedDesign = null;
+      document.getElementById('apply-design-btn').disabled = true;
     }
 
-    function applyDesignToPreview() {
-      const frame = document.getElementById('design-preview');
+    async function generateDesignFromImage() {
+      const file = document.getElementById('design-reference-file').files[0];
+      if (!file || !designProject) return showToast('Choose a screenshot or photo first.', 'error');
+      if (file.size > 5_000_000) return showToast('Please choose an image smaller than 5 MB.', 'error');
+      const status = document.getElementById('design-status');
+      const button = document.getElementById('generate-design-btn');
+      button.disabled = true;
+      status.textContent = 'Analyzing the reference and building your survey preview…';
       try {
-        const doc = frame.contentDocument;
-        if (!doc || !doc.getElementById('survey-title')) return;
-        const design = readDesignForm();
-        let style = doc.getElementById('designer-custom-style');
-        if (!style) { style = doc.createElement('style'); style.id = 'designer-custom-style'; doc.head.appendChild(style); }
-        style.textContent = `body{background:${design.backgroundColor};font-family:${design.fontFamily || 'inherit'}} #survey-title{color:${design.accentColor}} #survey-submit-btn{background:${design.accentColor}} ${design.customCss || ''}`;
-        doc.getElementById('survey-subtitle').textContent = design.subtitle || 'Select details that reflect your own experience to create a draft you can review and edit.';
-        doc.getElementById('survey-submit-btn').lastChild.textContent = ` ${design.buttonText || 'Generate Review'}`;
-        let logo = doc.getElementById('designer-logo-preview');
-        if (design.logoUrl) {
-          if (!logo) { logo = doc.createElement('img'); logo.id = 'designer-logo-preview'; logo.className = 'max-h-20 mx-auto mb-4'; doc.getElementById('survey-title').before(logo); }
-          logo.src = design.logoUrl;
-        } else if (logo) logo.remove();
-      } catch (error) { /* Preview updates when the same-origin survey finishes loading. */ }
+        const imageDataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        const result = await api(`/api/projects/${encodeURIComponent(designProject.id)}/design-from-image`, {
+          method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({imageDataUrl})
+        });
+        pendingGeneratedDesign = result.design;
+        const frame = document.getElementById('design-preview');
+        frame.onload = () => applyDesignToPreview(pendingGeneratedDesign);
+        if (frame.contentDocument?.readyState === 'complete' && frame.contentDocument.getElementById('survey-title')) applyDesignToPreview(pendingGeneratedDesign);
+        document.getElementById('apply-design-btn').disabled = false;
+        status.textContent = 'Preview ready. Review it, then apply the design to the live survey.';
+      } catch (error) { status.textContent = error.message; }
+      finally { button.disabled = false; }
     }
 
-    async function saveDesign(event) {
-      event.preventDefault();
-      if (!designProject) return;
+    function applyDesignToPreview(design) {
+      if (!design) return;
+      const doc = document.getElementById('design-preview').contentDocument;
+      if (!doc || !doc.getElementById('survey-title')) return;
+      let style = doc.getElementById('designer-custom-style');
+      if (!style) { style = doc.createElement('style'); style.id = 'designer-custom-style'; doc.head.appendChild(style); }
+      style.textContent = `body{background:${design.backgroundColor || '#0b0f19'};font-family:${design.fontFamily || 'inherit'}} #survey-title{color:${design.accentColor || '#6366f1'}} #survey-submit-btn{background:${design.accentColor || '#6366f1'}} ${design.customCss || ''}`;
+    }
+
+    async function saveDesign() {
+      if (!designProject || !pendingGeneratedDesign) return;
       try {
         const updated = await api(`/api/projects/${encodeURIComponent(designProject.id)}/design`, {
-          method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({design:readDesignForm()})
+          method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({design:pendingGeneratedDesign})
         });
         designProject = updated;
         projects = projects.map(item => item.id === updated.id ? updated : item);
         renderProjectsGrid();
+        document.getElementById('design-status').textContent = 'Design applied to the live survey.';
         showToast('Design saved and applied to the live survey.');
       } catch (error) { showToast(error.message, 'error'); }
     }
