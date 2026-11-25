@@ -13,7 +13,11 @@ import main
 
 
 class FakeCompletions:
+    def __init__(self):
+        self.requests = []
+
     def create(self, **kwargs):
+        self.requests.append(kwargs)
         return SimpleNamespace(
             choices=[
                 SimpleNamespace(
@@ -109,6 +113,18 @@ class ReviewGenerationTests(unittest.TestCase):
 
         generated = self.generate("validated")
         self.assertEqual(generated["reviewCount"], 1)
+
+    def test_review_prompt_uses_conversational_correct_language(self):
+        self.create_project("conversational", None)
+        self.generate("conversational")
+
+        messages = main.client.chat.completions.requests[-1]["messages"]
+        system_prompt = messages[0]["content"]
+        user_prompt = messages[1]["content"]
+        self.assertIn("conversational voice", system_prompt)
+        self.assertIn("grammatically correct", system_prompt)
+        self.assertIn("Do not invent facts", system_prompt)
+        self.assertIn("sounds natural when read aloud", user_prompt)
 
     def test_limit_reopens_after_midnight_in_configured_timezone(self):
         self.create_project("daily", 1)

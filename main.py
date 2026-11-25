@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -59,6 +60,7 @@ def initialize_database():
                 redirect_url TEXT NOT NULL,
                 review_limit INTEGER,
                 questions_json TEXT NOT NULL,
+                design_json TEXT NOT NULL DEFAULT '{}',
                 created_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS reviews (
@@ -73,6 +75,9 @@ def initialize_database():
                 ON reviews(project_id, created_at, status);
             """
         )
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(projects)")}
+        if "design_json" not in columns:
+            connection.execute("ALTER TABLE projects ADD COLUMN design_json TEXT NOT NULL DEFAULT '{}'")
 
 
 initialize_database()
@@ -98,6 +103,10 @@ class ReviewRequest(BaseModel):
     selected_options: List[str] = Field(min_length=1)
 
 
+class DesignRequest(BaseModel):
+    design: dict = Field(default_factory=dict)
+
+
 def project_record(row, include_usage=False):
     record = {
         "id": row["id"],
@@ -105,6 +114,7 @@ def project_record(row, include_usage=False):
         "redirectUrl": row["redirect_url"],
         "reviewLimit": row["review_limit"],
         "questions": json.loads(row["questions_json"]),
+        "design": json.loads(row["design_json"]) if "design_json" in row.keys() else {},
     }
     if include_usage:
         record["reviewCount"] = row["review_count"]
@@ -213,6 +223,23 @@ async def delete_project(project_id: str):
     return {"deleted": True}
 
 
+@app.put("/api/projects/{project_id}/design")
+async def update_project_design(project_id: str, req: DesignRequest):
+    allowed = {"accentColor", "backgroundColor", "fontFamily", "logoUrl", "subtitle", "buttonText", "customCss"}
+    limits = {"accentColor": 7, "backgroundColor": 7, "fontFamily": 80, "logoUrl": 500, "subtitle": 300, "buttonText": 60, "customCss": 12000}
+    design = {key: value[:limits[key]] for key, value in req.design.items() if key in allowed and isinstance(value, str)}
+    for key in ("accentColor", "backgroundColor"):
+        value = design.get(key, "")
+        if value and not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+            raise HTTPException(status_code=422, detail=f"{key} must be a six-digit hex color.")
+    with connect_database() as connection:
+        cursor = connection.execute("UPDATE projects SET design_json = ? WHERE id = ?", (json.dumps(design), project_id))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        row = get_project_with_count(connection, project_id)
+    return project_record(row, include_usage=True)
+
+
 @app.get("/api/projects/{project_id}/reviews")
 async def list_project_reviews(project_id: str):
     with connect_database() as connection:
@@ -299,14 +326,17 @@ async def generate_review(req: ReviewRequest):
         )
 
     system_prompt = (
-        "Help someone express their own genuine experience in a clear, natural way. "
-        "Use only the details they selected; do not invent facts, make comparative claims, "
-        "or add a rating. Return only a concise first-person draft."
+        "Help someone express their own genuine experience in a relaxed, conversational voice. "
+        "Use everyday language, natural phrasing, and varied sentence lengths; keep the draft "
+        "readable and grammatically correct, not polished like an advertisement. Use only the "
+        "details they selected. Do not invent facts, make comparative claims, add a rating, or "
+        "introduce deliberate mistakes. Return only a concise first-person draft."
     )
     user_prompt = (
         f"Organization: {project['title']}\n"
         f"Details from the person's experience: {', '.join(req.selected_options)}\n"
-        "Write a concise first-person draft that reflects these details."
+        "Write a concise, easy-to-read first-person draft that reflects these details "
+        "and sounds natural when read aloud."
     )
 
     try:

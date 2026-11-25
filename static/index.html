@@ -256,6 +256,25 @@
     </div>
   </div>
 
+  <div id="design-modal" class="hidden fixed inset-0 z-50 overflow-y-auto p-4 bg-black/80 backdrop-blur-sm">
+    <div class="max-w-5xl mx-auto my-8 rounded-2xl bg-slate-900 border border-slate-700 p-6 space-y-5">
+      <div class="flex justify-between items-center"><div><h3 class="text-xl font-bold">Update design</h3><p id="design-project-name" class="text-sm text-slate-400"></p></div><button onclick="closeDesignEditor()" class="p-2 text-slate-400">✕</button></div>
+      <div class="grid md:grid-cols-2 gap-6">
+        <form id="design-form" class="space-y-3">
+          <label class="block text-xs text-slate-300">Accent color<input name="accentColor" type="color" class="block w-full h-10 mt-1 bg-slate-800 rounded"></label>
+          <label class="block text-xs text-slate-300">Page background<input name="backgroundColor" type="color" class="block w-full h-10 mt-1 bg-slate-800 rounded"></label>
+          <label class="block text-xs text-slate-300">Font family<input name="fontFamily" placeholder="Plus Jakarta Sans, sans-serif" class="w-full p-2 mt-1 rounded bg-slate-800 text-white"></label>
+          <label class="block text-xs text-slate-300">Logo image URL<input name="logoUrl" type="url" placeholder="https://..." class="w-full p-2 mt-1 rounded bg-slate-800 text-white"></label>
+          <label class="block text-xs text-slate-300">Survey subtitle<input name="subtitle" class="w-full p-2 mt-1 rounded bg-slate-800 text-white"></label>
+          <label class="block text-xs text-slate-300">Button text<input name="buttonText" class="w-full p-2 mt-1 rounded bg-slate-800 text-white"></label>
+          <label class="block text-xs text-slate-300">Custom CSS<textarea name="customCss" rows="7" placeholder="Use #view-survey, #survey-title, #survey-submit-btn, #survey-questions-mount ..." class="w-full p-2 mt-1 rounded bg-slate-800 text-white font-mono"></textarea></label>
+          <div class="flex gap-2"><button type="submit" class="px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold">Save design</button><button type="button" id="copy-designer-link" class="px-4 py-2 rounded-lg bg-slate-700 text-white">Copy designer link</button></div>
+        </form>
+        <div><p class="text-xs text-slate-400 mb-2">Live preview</p><iframe id="design-preview" title="Survey design preview" class="w-full h-[560px] rounded-xl border border-slate-700 bg-[#0b0f19]"></iframe></div>
+      </div>
+    </div>
+  </div>
+
   <script>
     const LEGACY_STORAGE_KEY = 'URG_PROJECTS_DATA_V2';
     const LEGACY_MIGRATION_KEY = 'URG_PROJECTS_IMPORTED_TO_SERVER';
@@ -264,6 +283,7 @@
     let pendingDeleteId = null;
     let cachedSelectedOptions = [];
     let quotaRefreshTimeout = null;
+    let designProject = null;
 
     async function api(path, options = {}) {
       const response = await fetch(path, {
@@ -288,6 +308,8 @@
       document.getElementById('project-form').addEventListener('submit', handleSaveProject);
       document.getElementById('survey-form').addEventListener('submit', handleGenerateReview);
       document.getElementById('confirm-delete-btn').addEventListener('click', deleteProject);
+      document.getElementById('design-form').addEventListener('submit', saveDesign);
+      document.getElementById('copy-designer-link').addEventListener('click', copyDesignerLink);
       document.getElementById('project-reviews-list').addEventListener('click', event => {
         if (event.target.closest('[data-copy-review]')) {
           const text = event.target.closest('[data-copy-review]').dataset.copyReview;
@@ -302,6 +324,15 @@
       if (projectId) {
         document.getElementById('admin-nav').classList.add('hidden');
         await navigateTo('survey', projectId);
+        return;
+      }
+
+      const designProjectId = new URLSearchParams(window.location.search).get('design_project_id');
+      if (designProjectId) {
+        await showAdminApp();
+        const project = projects.find(item => item.id === designProjectId);
+        if (project) openDesignEditor(project);
+        else showToast('Project not found.', 'error');
         return;
       }
 
@@ -531,6 +562,7 @@
           <div class="pt-4 border-t border-slate-800/80 flex flex-wrap items-center gap-2">
             <button data-action="qr" data-id="${escapeHTML(project.id)}" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 flex items-center"><i data-lucide="qr-code" class="w-4 h-4 mr-1.5"></i> QR Code</button>
             <button data-action="reviews" data-id="${escapeHTML(project.id)}" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 flex items-center"><i data-lucide="file-text" class="w-4 h-4 mr-1.5"></i> Reviews</button>
+            <button data-action="design" data-id="${escapeHTML(project.id)}" class="px-3 py-2 rounded-xl bg-purple-600/80 hover:bg-purple-500 text-xs font-semibold text-white">Update design</button>
             <button data-action="launch" data-id="${escapeHTML(project.id)}" class="flex-1 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white flex items-center justify-center">Launch Survey <i data-lucide="arrow-right" class="w-3.5 h-3.5 ml-1"></i></button>
           </div>`;
         card.addEventListener('click', event => {
@@ -541,6 +573,7 @@
           if (button.dataset.action === 'delete') promptDelete(selectedProject.id, selectedProject.title);
           if (button.dataset.action === 'qr') openQrModal(selectedProject.title, selectedProject.id);
           if (button.dataset.action === 'reviews') openReviewsModal(selectedProject);
+          if (button.dataset.action === 'design') openDesignEditor(selectedProject);
           if (button.dataset.action === 'launch') navigateTo('survey', selectedProject.id);
         });
         grid.appendChild(card);
@@ -553,6 +586,66 @@
       document.getElementById('delete-project-name').innerText = title;
       document.getElementById('delete-modal').classList.remove('hidden');
     }
+
+    function openDesignEditor(project) {
+      designProject = project;
+      document.getElementById('design-project-name').textContent = project.title;
+      const form = document.getElementById('design-form');
+      const design = project.design || {};
+      for (const field of form.elements) if (field.name) field.value = design[field.name] || ({accentColor:'#6366f1', backgroundColor:'#0b0f19'}[field.name] || '');
+      document.getElementById('design-modal').classList.remove('hidden');
+      const preview = document.getElementById('design-preview');
+      preview.src = `/?project_id=${encodeURIComponent(project.id)}&design_preview=1`;
+      form.oninput = () => applyDesignToPreview();
+      preview.onload = () => applyDesignToPreview();
+    }
+
+    function readDesignForm() {
+      const form = document.getElementById('design-form');
+      return Object.fromEntries(Array.from(form.elements).filter(item => item.name).map(item => [item.name, item.value.trim()]));
+    }
+
+    function applyDesignToPreview() {
+      const frame = document.getElementById('design-preview');
+      try {
+        const doc = frame.contentDocument;
+        if (!doc || !doc.getElementById('survey-title')) return;
+        const design = readDesignForm();
+        let style = doc.getElementById('designer-custom-style');
+        if (!style) { style = doc.createElement('style'); style.id = 'designer-custom-style'; doc.head.appendChild(style); }
+        style.textContent = `body{background:${design.backgroundColor};font-family:${design.fontFamily || 'inherit'}} #survey-title{color:${design.accentColor}} #survey-submit-btn{background:${design.accentColor}} ${design.customCss || ''}`;
+        doc.getElementById('survey-subtitle').textContent = design.subtitle || 'Select details that reflect your own experience to create a draft you can review and edit.';
+        doc.getElementById('survey-submit-btn').lastChild.textContent = ` ${design.buttonText || 'Generate Review'}`;
+        let logo = doc.getElementById('designer-logo-preview');
+        if (design.logoUrl) {
+          if (!logo) { logo = doc.createElement('img'); logo.id = 'designer-logo-preview'; logo.className = 'max-h-20 mx-auto mb-4'; doc.getElementById('survey-title').before(logo); }
+          logo.src = design.logoUrl;
+        } else if (logo) logo.remove();
+      } catch (error) { /* Preview updates when the same-origin survey finishes loading. */ }
+    }
+
+    async function saveDesign(event) {
+      event.preventDefault();
+      if (!designProject) return;
+      try {
+        const updated = await api(`/api/projects/${encodeURIComponent(designProject.id)}/design`, {
+          method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({design:readDesignForm()})
+        });
+        designProject = updated;
+        projects = projects.map(item => item.id === updated.id ? updated : item);
+        renderProjectsGrid();
+        showToast('Design saved and applied to the live survey.');
+      } catch (error) { showToast(error.message, 'error'); }
+    }
+
+    async function copyDesignerLink() {
+      if (!designProject) return;
+      const link = `${window.location.origin}/?design_project_id=${encodeURIComponent(designProject.id)}`;
+      try { await navigator.clipboard.writeText(link); showToast('Designer link copied.'); }
+      catch (error) { window.prompt('Copy this designer link:', link); }
+    }
+
+    function closeDesignEditor() { document.getElementById('design-modal').classList.add('hidden'); }
 
     async function deleteProject() {
       if (!pendingDeleteId) return;
@@ -620,8 +713,9 @@
         const project = activeSurveyProject;
         scheduleQuotaRefresh(project.reviewLimitResetAt);
         document.getElementById('survey-title').innerText = project.title;
+        applySurveyDesign(project.design || {});
         document.getElementById('survey-badge').innerText = 'Customer Experience';
-        document.getElementById('survey-subtitle').innerText = 'Select details that reflect your own experience to create a draft you can review and edit.';
+        document.getElementById('survey-subtitle').innerText = project.design?.subtitle || 'Select details that reflect your own experience to create a draft you can review and edit.';
         document.getElementById('review-output-container').classList.add('hidden');
         document.getElementById('review-limit-notice').classList.add('hidden');
         mount.innerHTML = '';
@@ -658,6 +752,26 @@
       } catch (error) {
         mount.innerHTML = `<p class="text-sm text-red-400">${escapeHTML(error.message)}</p>`;
       }
+    }
+
+    function applySurveyDesign(design) {
+      document.body.style.backgroundColor = design.backgroundColor || '';
+      document.body.style.fontFamily = design.fontFamily || '';
+      document.getElementById('survey-title').style.color = design.accentColor || '';
+      document.getElementById('survey-submit-btn').style.background = design.accentColor || '';
+      document.getElementById('survey-subtitle').textContent = design.subtitle || 'Select details that reflect your own experience to create a draft you can review and edit.';
+      const button = document.getElementById('survey-submit-btn');
+      const icon = button.querySelector('i');
+      button.textContent = design.buttonText || 'Generate Review';
+      if (icon) button.prepend(icon);
+      let logo = document.getElementById('survey-brand-logo');
+      if (design.logoUrl) {
+        if (!logo) { logo = document.createElement('img'); logo.id = 'survey-brand-logo'; logo.className = 'max-h-20 mx-auto mb-4'; document.getElementById('survey-title').before(logo); }
+        logo.src = design.logoUrl;
+      } else if (logo) logo.remove();
+      let style = document.getElementById('survey-custom-style');
+      if (!style) { style = document.createElement('style'); style.id = 'survey-custom-style'; document.head.appendChild(style); }
+      style.textContent = design.customCss || '';
     }
 
     async function submitReviewGeneration() {
