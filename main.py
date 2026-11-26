@@ -14,16 +14,20 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field, HttpUrl
+import psycopg
+from psycopg.rows import dict_row
 
 app = FastAPI(title="Universal Review Generator")
 logger = logging.getLogger(__name__)
 
 api_key = os.environ.get("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key) if api_key else None
+design_model = os.environ.get("DESIGN_MODEL", "gpt-4.1")
 
 BASE_DIR = os.path.dirname(__file__)
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DATABASE_PATH = os.environ.get("DATABASE_PATH", os.path.join(BASE_DIR, "reviews.sqlite3"))
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 REVIEW_LIMIT_TIMEZONE_NAME = os.environ.get(
     "REVIEW_LIMIT_TIMEZONE", "Asia/Kolkata"
 )
@@ -37,6 +41,11 @@ except ZoneInfoNotFoundError as error:
 
 @contextmanager
 def connect_database():
+    if DATABASE_URL:
+        database_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        with psycopg.connect(database_url, row_factory=dict_row) as raw_connection:
+            yield PostgresConnection(raw_connection)
+        return
     connection = sqlite3.connect(DATABASE_PATH, timeout=10)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
@@ -48,6 +57,19 @@ def connect_database():
         raise
     finally:
         connection.close()
+
+
+class PostgresConnection:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def execute(self, query, parameters=()):
+        return self.connection.execute(query.replace("?", "%s"), parameters)
+
+    def executescript(self, script):
+        for statement in script.split(";"):
+            if statement.strip():
+                self.connection.execute(statement)
 
 
 def initialize_database():
@@ -75,12 +97,48 @@ def initialize_database():
                 ON reviews(project_id, created_at, status);
             """
         )
-        columns = {row["name"] for row in connection.execute("PRAGMA table_info(projects)")}
-        if "design_json" not in columns:
-            connection.execute("ALTER TABLE projects ADD COLUMN design_json TEXT NOT NULL DEFAULT '{}'")
+        if DATABASE_URL:
+            connection.execute("ALTER TABLE projects ADD COLUMN IF NOT EXISTS design_json TEXT NOT NULL DEFAULT '{}'")
+        else:
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(projects)")}
+            if "design_json" not in columns:
+                connection.execute("ALTER TABLE projects ADD COLUMN design_json TEXT NOT NULL DEFAULT '{}'")
 
 
 initialize_database()
+
+
+def migrate_local_sqlite_data():
+    if not DATABASE_URL or not os.path.isfile(DATABASE_PATH):
+        return
+    legacy = sqlite3.connect(DATABASE_PATH)
+    legacy.row_factory = sqlite3.Row
+    try:
+        tables = {row["name"] for row in legacy.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "projects" not in tables:
+            return
+        projects_to_copy = [dict(row) for row in legacy.execute("SELECT * FROM projects")]
+        reviews_to_copy = [dict(row) for row in legacy.execute("SELECT * FROM reviews")] if "reviews" in tables else []
+    finally:
+        legacy.close()
+    with connect_database() as connection:
+        for project in projects_to_copy:
+            connection.execute(
+                """INSERT INTO projects (id, title, redirect_url, review_limit, questions_json, design_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING""",
+                (project["id"], project["title"], project["redirect_url"], project.get("review_limit"),
+                 project["questions_json"], project.get("design_json", "{}"), project["created_at"]),
+            )
+        for review in reviews_to_copy:
+            connection.execute(
+                """INSERT INTO reviews (id, project_id, status, review_text, selected_options_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING""",
+                (review["id"], review["project_id"], review["status"], review.get("review_text", ""),
+                 review["selected_options_json"], review["created_at"]),
+            )
+
+
+migrate_local_sqlite_data()
 
 
 class Question(BaseModel):
@@ -109,6 +167,10 @@ class DesignRequest(BaseModel):
 
 class DesignImageRequest(BaseModel):
     imageDataUrl: str = Field(min_length=30, max_length=8_000_000)
+
+
+class ProjectQuestionsUpdate(BaseModel):
+    questions: List[Question] = Field(min_length=1)
 
 
 def project_record(row, include_usage=False):
@@ -227,6 +289,19 @@ async def delete_project(project_id: str):
     return {"deleted": True}
 
 
+@app.put("/api/projects/{project_id}/questions")
+async def update_project_questions(project_id: str, req: ProjectQuestionsUpdate):
+    with connect_database() as connection:
+        cursor = connection.execute(
+            "UPDATE projects SET questions_json = ? WHERE id = ?",
+            (json.dumps([question.model_dump() for question in req.questions]), project_id),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        row = get_project_with_count(connection, project_id)
+    return project_record(row, include_usage=True)
+
+
 @app.put("/api/projects/{project_id}/design")
 async def update_project_design(project_id: str, req: DesignRequest):
     allowed = {"accentColor", "backgroundColor", "fontFamily", "logoUrl", "subtitle", "buttonText", "customCss"}
@@ -264,7 +339,7 @@ async def create_design_from_image(project_id: str, req: DesignImageRequest):
                 {"role": "system", "content": (
                     "You are a frontend designer. Recreate the visual design in the supplied reference image "
                     "for an existing customer survey. Return JSON with keys accentColor, backgroundColor, "
-                    "fontFamily, customCss. customCss must be CSS only, scoped to #view-survey and its children, "
+                    "fontFamily, customCss. customCss must be CSS only, scoped to #app-main, #view-survey, and their children, "
                     "and use the existing survey elements #survey-title, #survey-subtitle, "
                     "#survey-questions-mount, #survey-submit-btn, #review-output-container. Preserve all "
                     "question text, options, and functionality. Match layout, spacing, colors, borders, typography, "
@@ -337,7 +412,7 @@ async def generate_review(req: ReviewRequest):
 
     review_id = f"review_{uuid.uuid4().hex}"
     with connect_database() as connection:
-        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("BEGIN" if DATABASE_URL else "BEGIN IMMEDIATE")
         project = get_project_with_count(connection, req.project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found.")
@@ -393,7 +468,7 @@ async def generate_review(req: ReviewRequest):
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=design_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

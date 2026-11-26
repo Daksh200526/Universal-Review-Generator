@@ -272,6 +272,15 @@
     </div>
   </div>
 
+  <div id="questions-modal" class="hidden fixed inset-0 z-50 overflow-y-auto p-4 bg-black/80 backdrop-blur-sm">
+    <div class="max-w-3xl mx-auto my-8 rounded-2xl bg-slate-900 border border-slate-700 p-6 space-y-5">
+      <div class="flex items-center justify-between"><div><h3 class="text-xl font-bold">Edit project questions</h3><p id="questions-project-name" class="text-sm text-slate-400"></p></div><button type="button" onclick="closeQuestionsEditor()" class="p-2 text-slate-400">Close</button></div>
+      <div class="flex justify-end"><button type="button" onclick="addQuestionBlock('', 'single', [], 'edit-questions-container')" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm">Add question</button></div>
+      <div id="edit-questions-container" class="space-y-4"></div>
+      <div class="flex justify-end gap-2 border-t border-slate-700 pt-4"><button type="button" onclick="closeQuestionsEditor()" class="px-4 py-2 rounded-lg bg-slate-700 text-white">Cancel</button><button id="save-questions-btn" type="button" class="px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold">Save questions</button></div>
+    </div>
+  </div>
+
   <script>
     const LEGACY_STORAGE_KEY = 'URG_PROJECTS_DATA_V2';
     const LEGACY_MIGRATION_KEY = 'URG_PROJECTS_IMPORTED_TO_SERVER';
@@ -282,6 +291,7 @@
     let quotaRefreshTimeout = null;
     let designProject = null;
     let pendingGeneratedDesign = null;
+    let questionsProject = null;
 
     async function api(path, options = {}) {
       const response = await fetch(path, {
@@ -310,6 +320,7 @@
       document.getElementById('apply-design-btn').addEventListener('click', saveDesign);
       document.getElementById('design-reference-file').addEventListener('change', showDesignReference);
       document.getElementById('copy-designer-link').addEventListener('click', copyDesignerLink);
+      document.getElementById('save-questions-btn').addEventListener('click', saveProjectQuestions);
       document.getElementById('project-reviews-list').addEventListener('click', event => {
         if (event.target.closest('[data-copy-review]')) {
           const text = event.target.closest('[data-copy-review]').dataset.copyReview;
@@ -468,12 +479,13 @@
       custom.required = showCustom;
     }
 
-    function addQuestionBlock(questionText = '', questionType = 'single', options = []) {
-      const container = document.getElementById('questions-container');
+    function addQuestionBlock(questionText = '', questionType = 'single', options = [], containerId = 'questions-container', questionId = '') {
+      const container = document.getElementById(containerId);
       const id = 'q_' + Math.random().toString(36).slice(2, 11);
       const block = document.createElement('div');
       block.className = 'glassmorphism p-5 rounded-2xl border border-slate-800 space-y-4';
       block.id = id;
+      if (questionId) block.dataset.questionId = questionId;
       block.innerHTML = `
         <div class="flex items-center justify-between gap-4">
           <input type="text" placeholder="Enter Question Prompt (e.g. How was our service?)..." required value="${escapeHTML(questionText)}" class="q-title-input flex-1 px-3.5 py-2.5 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:border-indigo-500 outline-none" />
@@ -506,12 +518,7 @@
         questions: []
       };
 
-      document.querySelectorAll('#questions-container > div').forEach(block => {
-        const text = block.querySelector('.q-title-input').value.trim();
-        const type = block.querySelector('.q-type-select').value;
-        const options = block.querySelector('.q-options-input').value.split(',').map(value => value.trim()).filter(Boolean);
-        if (text && options.length) project.questions.push({ id: block.id, text, type, options });
-      });
+      project.questions = readQuestions('questions-container');
       if (!project.questions.length) return showToast('Add at least one question with answer options.', 'error');
 
       try {
@@ -530,6 +537,58 @@
         navigateTo('projects-list');
       } catch (error) {
         showToast(error.message, 'error');
+      }
+    }
+
+    function readQuestions(containerId) {
+      const questions = [];
+      document.querySelectorAll(`#${containerId} > div`).forEach(block => {
+        const text = block.querySelector('.q-title-input').value.trim();
+        const type = block.querySelector('.q-type-select').value;
+        const options = block.querySelector('.q-options-input').value.split(',').map(value => value.trim()).filter(Boolean);
+        if (text && options.length) questions.push({ id: block.dataset.questionId || block.id, text, type, options });
+      });
+      return questions;
+    }
+
+    function openQuestionsEditor(project) {
+      questionsProject = project;
+      document.getElementById('questions-project-name').textContent = project.title;
+      const container = document.getElementById('edit-questions-container');
+      container.innerHTML = '';
+      (project.questions || []).forEach(question =>
+        addQuestionBlock(question.text, question.type, question.options, 'edit-questions-container', question.id));
+      document.getElementById('questions-modal').classList.remove('hidden');
+    }
+
+    function closeQuestionsEditor() {
+      document.getElementById('questions-modal').classList.add('hidden');
+      questionsProject = null;
+    }
+
+    async function saveProjectQuestions() {
+      if (!questionsProject) return;
+      const questions = readQuestions('edit-questions-container');
+      if (!questions.length) return showToast('Keep at least one question with answer options.', 'error');
+      if (questions.length !== document.querySelectorAll('#edit-questions-container > div').length) {
+        return showToast('Every question needs a prompt and at least one option.', 'error');
+      }
+      const button = document.getElementById('save-questions-btn');
+      button.disabled = true;
+      try {
+        const updated = await api(`/api/projects/${encodeURIComponent(questionsProject.id)}/questions`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ questions })
+        });
+        projects = projects.map(project => project.id === updated.id ? updated : project);
+        renderProjectsGrid();
+        closeQuestionsEditor();
+        showToast('Project questions updated.');
+      } catch (error) {
+        showToast(error.message, 'error');
+      } finally {
+        button.disabled = false;
       }
     }
 
@@ -562,6 +621,7 @@
           <div class="pt-4 border-t border-slate-800/80 flex flex-wrap items-center gap-2">
             <button data-action="qr" data-id="${escapeHTML(project.id)}" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 flex items-center"><i data-lucide="qr-code" class="w-4 h-4 mr-1.5"></i> QR Code</button>
             <button data-action="reviews" data-id="${escapeHTML(project.id)}" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 flex items-center"><i data-lucide="file-text" class="w-4 h-4 mr-1.5"></i> Reviews</button>
+            <button data-action="questions" data-id="${escapeHTML(project.id)}" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200">Edit questions</button>
             <button data-action="design" data-id="${escapeHTML(project.id)}" class="px-3 py-2 rounded-xl bg-purple-600/80 hover:bg-purple-500 text-xs font-semibold text-white">Update design</button>
             <button data-action="launch" data-id="${escapeHTML(project.id)}" class="flex-1 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white flex items-center justify-center">Launch Survey <i data-lucide="arrow-right" class="w-3.5 h-3.5 ml-1"></i></button>
           </div>`;
@@ -574,6 +634,7 @@
           if (button.dataset.action === 'qr') openQrModal(selectedProject.title, selectedProject.id);
           if (button.dataset.action === 'reviews') openReviewsModal(selectedProject);
           if (button.dataset.action === 'design') openDesignEditor(selectedProject);
+          if (button.dataset.action === 'questions') openQuestionsEditor(selectedProject);
           if (button.dataset.action === 'launch') navigateTo('survey', selectedProject.id);
         });
         grid.appendChild(card);
@@ -643,6 +704,10 @@
       if (!doc || !doc.getElementById('survey-title')) return;
       let style = doc.getElementById('designer-custom-style');
       if (!style) { style = doc.createElement('style'); style.id = 'designer-custom-style'; doc.head.appendChild(style); }
+      doc.body.style.backgroundColor = design.backgroundColor || '#0b0f19';
+      doc.body.style.fontFamily = design.fontFamily || 'inherit';
+      doc.getElementById('survey-title').style.color = design.accentColor || '#6366f1';
+      doc.getElementById('survey-submit-btn').style.background = design.accentColor || '#6366f1';
       style.textContent = `body{background:${design.backgroundColor || '#0b0f19'};font-family:${design.fontFamily || 'inherit'}} #survey-title{color:${design.accentColor || '#6366f1'}} #survey-submit-btn{background:${design.accentColor || '#6366f1'}} ${design.customCss || ''}`;
     }
 
